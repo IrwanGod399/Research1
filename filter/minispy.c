@@ -711,7 +711,7 @@ NTSTATUS AddTargetToList(WCHAR* PathBuffer) {
 //=======================================================================================================================
 
 
-BOOLEAN IsOpen(ULONG ProcessId, OP_TYPE OpType) {
+BOOLEAN Check(ULONG ProcessId, OP_TYPE OpType) {
     PLIST_ENTRY entry;
     PPROCESS_STATS pStats = NULL;
     BOOLEAN isRansomware = FALSE;
@@ -853,7 +853,7 @@ SpyPreOperationCallback(
                 return FLT_PREOP_SUCCESS_NO_CALLBACK;
             }
             // Panggil Helper dengan tipe RENAME
-            if (IsOpen(ProcessId, OP_TYPE_RENAME)) {
+            if (Check(ProcessId, OP_TYPE_RENAME)) {
 
                 // --- BAGIAN MENCARI NAMA PROCESS ---
                 PEPROCESS pProcess = NULL;
@@ -923,7 +923,7 @@ SpyPreOperationCallback(
             // Tidak perlu dicek rename atau open count-nya.
             return FLT_PREOP_SUCCESS_NO_CALLBACK;
         }
-        if (IsOpen(ProcessId, OP_TYPE_OPEN)) {
+        if (Check(ProcessId, OP_TYPE_OPEN)) {
             PEPROCESS pProcess = NULL;
             PCHAR procName = "Unknown"; // Default jika gagal
             PUNICODE_STRING pImageName = NULL;
