@@ -106,6 +106,129 @@ RtlFindUnicodeSubstring(
 //---------------------------------------------------------------------------
 //                      ROUTINES
 //---------------------------------------------------------------------------
+BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
+    PWHITELIST_ENTRY pEntry = NULL;
+    PLIST_ENTRY entry;
+    BOOLEAN isDuplicate = FALSE;
+    if (!Path || !Path->Buffer || Path->Length == 0 || Path->Buffer[0] != L'\\') return FALSE;
+
+
+    KeAcquireGuardedMutex(&g_WhitelistLock);
+
+    // Loop dari awal sampai akhir list
+    for (entry = g_WhitelistHead.Flink; entry != &g_WhitelistHead; entry = entry->Flink) {
+        pEntry = CONTAINING_RECORD(entry, WHITELIST_ENTRY, ListEntry);
+
+        // Bandingkan String (TRUE = Case Insensitive / Huruf Besar Kecil Dianggap Sama)
+        if (RtlEqualUnicodeString(Path, &pEntry->ImagePath, TRUE)) {
+            isDuplicate = TRUE;
+            break; // KETEMU! Path ini sudah ada.
+        }
+    }
+
+    // Jika Duplikat, Lepas Lock dan Keluar
+    if (isDuplicate) {
+        KeReleaseGuardedMutex(&g_WhitelistLock);
+        // Optional Debug:
+         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [SKIP] Duplicate Path: %wZ\n", Path);
+        return FALSE;
+    }
+
+    // 1. Alokasi Node List
+    pEntry = (PWHITELIST_ENTRY)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WHITELIST_ENTRY), 'wlst');
+    if (!pEntry) return FALSE;
+
+    RtlZeroMemory(pEntry, sizeof(WHITELIST_ENTRY));
+
+    // 2. Alokasi Buffer String (PENTING: Kita harus copy stringnya, bukan cuma pointernya)
+    pEntry->ImagePath.Length = Path->Length;
+    pEntry->ImagePath.MaximumLength = Path->Length + sizeof(WCHAR); // +Null Terminator
+    pEntry->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, pEntry->ImagePath.MaximumLength, 'str');
+
+    if (!pEntry->ImagePath.Buffer) {
+        ExFreePoolWithTag(pEntry, 'wlst');
+        return FALSE;
+    }
+
+    // 3. Copy String
+    RtlCopyMemory(pEntry->ImagePath.Buffer, Path->Buffer, Path->Length);
+    pEntry->ImagePath.Buffer[Path->Length / sizeof(WCHAR)] = L'\0'; // Null Terminate
+
+    // 4. Masukkan ke List (Thread Safe)
+    InsertHeadList(&g_WhitelistHead, &pEntry->ListEntry);
+    KeReleaseGuardedMutex(&g_WhitelistLock);
+
+    // Debug Print (Biar kelihatan path apa saja yang masuk)
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [WHITELIST ADD] %wZ\n", &pEntry->ImagePath);
+    return TRUE;
+}
+//=============================================================================
+//==========================================================================
+VOID WhitelistExistingProcesses() {
+    NTSTATUS status;
+    PVOID buffer = NULL;
+    ULONG bufferSize = 0;
+    ULONG returnLength = 0;
+    PSYSTEM_PROCESS_INFORMATION pInfo = NULL;
+    LARGE_INTEGER currentTime;
+    ULONG count = 0;
+    PEPROCESS eProcess = NULL;
+    PUNICODE_STRING pPathName = NULL;
+    KeQuerySystemTime(&currentTime);
+
+    // 1. Cek ukuran buffer yang dibutuhkan
+    status = ZwQuerySystemInformation(SystemProcessInformation, NULL, 0, &returnLength);
+    if (status != STATUS_INFO_LENGTH_MISMATCH && !NT_SUCCESS(status)) return;
+    // 2. Alokasi Buffer (Tambah sedikit extra space biar aman)
+    bufferSize = returnLength + 4096;
+    buffer = ExAllocatePool2(POOL_FLAG_PAGED, bufferSize, 'snap');
+
+    if (!buffer) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: Gagal Alokasi Memori!\n");
+        return;
+    }
+    // 3. Ambil Snapshot Process
+    status = ZwQuerySystemInformation(SystemProcessInformation, buffer, bufferSize, &returnLength);
+    
+    if (NT_SUCCESS(status)) {
+        pInfo = (PSYSTEM_PROCESS_INFORMATION)buffer;
+        
+        // Kunci Mutex agar aman
+        KeAcquireGuardedMutex(&g_StatsLock);
+        // 4. LOOPING SEMUA PID
+        while (TRUE) {
+            HANDLE pid = pInfo->UniqueProcessId;
+            if ((ULONG)(ULONG_PTR)pid > 4) {
+                if (NT_SUCCESS(PsLookupProcessByProcessId(pid, &eProcess))) {
+
+                    // B. Dapatkan Full Path (Allocated by Kernel)
+                    if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
+
+                        // C. Masukkan ke Whitelist (Panggil fungsi helper add Anda)
+                        if (AddPathToWhitelist(pPathName)) {
+                            count++;
+                        }
+
+                        // D. PENTING: Bebaskan Memori String Path
+                        ExFreePool(pPathName);
+                    }
+
+                    // E. PENTING: Lepaskan Object Reference (Biar gak Memory Leak)
+                    ObDereferenceObject(eProcess);
+                }
+            }
+            if (pInfo->NextEntryOffset == 0) break;
+            pInfo = (PSYSTEM_PROCESS_INFORMATION)((PUCHAR)pInfo + pInfo->NextEntryOffset);
+        }
+
+        KeReleaseGuardedMutex(&g_StatsLock);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "CoreSentinel: [INIT] Total Whitelisted Processes: %d\n", count);
+    }
+
+    ExFreePool(buffer);
+}
+
 
 NTSTATUS
 DriverEntry (
@@ -156,6 +279,11 @@ Return Value:
         ExInitializeFastMutex(&g_TargetListLock);
         InitializeListHead(&g_ProcessStatsList);
         KeInitializeGuardedMutex(&g_StatsLock);
+        InitializeListHead(&g_WhitelistHead);
+        KeInitializeGuardedMutex(&g_WhitelistLock);
+        WhitelistExistingProcesses();
+
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: Baseline Whitelist Created.\n");
         ExInitializeNPagedLookasideList( &MiniSpyData.FreeBufferList,
                                          NULL,
                                          NULL,
@@ -789,30 +917,33 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
     PUNICODE_STRING pImageName = NULL;
     BOOLEAN isSafe = FALSE;
     NTSTATUS status;
-
+    PLIST_ENTRY entry;
+    PWHITELIST_ENTRY pEntry;
     // A. SYSTEM IDLE & SYSTEM (PID 0 & 4)
     if (ProcessId <= 4) return TRUE;
 
     // B. Lookup Process
     status = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
     if (!NT_SUCCESS(status)) return FALSE;
-
     // C. Get Full Path
     status = SeLocateProcessImageName(pProcess, &pImageName);
 
+    
+
+    // Loop dari awal list sampai akhir
+
     if (NT_SUCCESS(status) && pImageName != NULL) {
-        // --- PERSIAPAN STRING PATTERN ---
-        UNICODE_STRING sSystem32;
+        KeAcquireGuardedMutex(&g_WhitelistLock);
+        for (entry = g_WhitelistHead.Flink; entry != &g_WhitelistHead; entry = entry->Flink) {
+            pEntry = CONTAINING_RECORD(entry, WHITELIST_ENTRY, ListEntry);
 
-        // Inisialisasi string yang mau dicari
-        RtlInitUnicodeString(&sSystem32, L"\\Windows\\System32\\svchost.exe");
-
-        // --- CEK APAKAH PATH MENGANDUNG PATTERN TSB ---
-        // Parameter ke-3 (TRUE) = Case Insensitive
-
-        if (RtlFindUnicodeSubstring(pImageName, &sSystem32, TRUE) != NULL) {
-            isSafe = TRUE;
+            if (RtlEqualUnicodeString(pImageName, &pEntry->ImagePath, TRUE)) {
+                isSafe = TRUE;
+                break; // KETEMU! Path ini aman.
+            }
         }
+
+        KeReleaseGuardedMutex(&g_WhitelistLock);
         // Bersihkan Memori
         ExFreePool(pImageName);
     }
@@ -820,6 +951,9 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
     ObDereferenceObject(pProcess);
     return isSafe;
 }
+
+
+
 FLT_PREOP_CALLBACK_STATUS
 SpyPreOperationCallback(
     _Inout_ PFLT_CALLBACK_DATA Data,

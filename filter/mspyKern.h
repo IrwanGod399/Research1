@@ -128,11 +128,69 @@ typedef struct _PROCESS_STATS {
     ULONG FileOpenCount;    // Counter untuk Create/Open
     ULONG FileRenameCount;  // Counter untuk Rename (BARU)
     LARGE_INTEGER LastResetTime; // Kapan terakhir counter di-reset
-    ULONG UniqueDirCount; // Counter Folder Unik
-    WCHAR DirCache[MAX_UNIQUE_DIRS][MAX_DIR_LENGTH];
-    USHORT DirLengths[MAX_UNIQUE_DIRS];
+    BOOLEAN IsWhitelisted;
     LIST_ENTRY ListEntry;       // Untuk menyambung ke linked list
 } PROCESS_STATS, * PPROCESS_STATS;
+// =============================================================
+// DEFINISI NATIVE API UNTUK SNAPSHOT PROCESS
+// =============================================================
+
+typedef enum _SYSTEM_INFORMATION_CLASS {
+    SystemProcessInformation = 5
+} SYSTEM_INFORMATION_CLASS;
+
+typedef struct _SYSTEM_PROCESS_INFORMATION {
+    ULONG NextEntryOffset;
+    ULONG NumberOfThreads;
+    LARGE_INTEGER WorkingSetPrivateSize;
+    ULONG HardFaultCount;
+    ULONG NumberOfThreadsHighWatermark;
+    ULONGLONG CycleTime;
+    LARGE_INTEGER CreateTime;
+    LARGE_INTEGER UserTime;
+    LARGE_INTEGER KernelTime;
+    UNICODE_STRING ImageName;
+    KPRIORITY BasePriority;
+    HANDLE UniqueProcessId; // <--- KITA BUTUH INI
+    HANDLE InheritedFromUniqueProcessId;
+    ULONG HandleCount;
+    ULONG SessionId;
+    ULONG_PTR UniqueProcessKey;
+    SIZE_T PeakVirtualSize;
+    SIZE_T VirtualSize;
+    ULONG PageFaultCount;
+    SIZE_T PeakWorkingSetSize;
+    SIZE_T WorkingSetSize;
+    SIZE_T QuotaPeakPagedPoolUsage;
+    SIZE_T QuotaPagedPoolUsage;
+    SIZE_T QuotaPeakNonPagedPoolUsage;
+    SIZE_T QuotaNonPagedPoolUsage;
+    SIZE_T PagefileUsage;
+    SIZE_T PeakPagefileUsage;
+    SIZE_T PrivatePageCount;
+    LARGE_INTEGER ReadOperationCount;
+    LARGE_INTEGER WriteOperationCount;
+    LARGE_INTEGER OtherOperationCount;
+    LARGE_INTEGER ReadTransferCount;
+    LARGE_INTEGER WriteTransferCount;
+    LARGE_INTEGER OtherTransferCount;
+} SYSTEM_PROCESS_INFORMATION, * PSYSTEM_PROCESS_INFORMATION;
+
+NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
+    IN SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    IN OUT PVOID SystemInformation,
+    IN ULONG SystemInformationLength,
+    OUT PULONG ReturnLength OPTIONAL
+);
+typedef struct _WHITELIST_ENTRY {
+    UNICODE_STRING ImagePath;
+    LIST_ENTRY ListEntry;
+} WHITELIST_ENTRY, * PWHITELIST_ENTRY;
+
+// Global Variable untuk Whitelist Path
+LIST_ENTRY g_WhitelistHead;
+KGUARDED_MUTEX g_WhitelistLock;
+
 
 // Global List Head & Lock
 LIST_ENTRY g_ProcessStatsList;
