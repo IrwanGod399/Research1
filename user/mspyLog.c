@@ -93,48 +93,6 @@ Return Value:
     return FALSE;
 }
 
-/*
- * =============================================================
- * FUNGSI PEMBANTU BARU: GetProcessNameFromPID
- * =============================================================
- *
- * Mencari nama proses (misal "notepad.exe") berdasarkan PID-nya
- * menggunakan ToolHelp32Snapshot.
- */
-void GetProcessNameFromPID(DWORD dwPID, TCHAR* pszProcessName, DWORD cchProcessName)
-{
-    HANDLE hSnap;
-    PROCESSENTRY32 pe32;
-
-    // Tetapkan nama default jika tidak ditemukan
-    // Note: _tcsncpy_s adalah versi aman dari strncpy
-    _tcsncpy_s(pszProcessName, cchProcessName, _T("<unknown>"), _TRUNCATE);
-
-    // 1. Ambil "snapshot" dari semua proses yang sedang berjalan
-    hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    pe32.dwSize = sizeof(PROCESSENTRY32);
-
-    // 2. Loop melalui snapshot
-    if (Process32First(hSnap, &pe32)) {
-
-        do {
-            // 3. Cek apakah PID-nya cocok
-            if (pe32.th32ProcessID == dwPID) {
-
-                // DITEMUKAN! Salin nama .exe-nya
-                _tcsncpy_s(pszProcessName, cchProcessName, pe32.szExeFile, _TRUNCATE);
-                break;
-            }
-        } while (Process32Next(hSnap, &pe32));
-    }
-
-    // 4. Bersihkan handle
-    CloseHandle(hSnap);
-}
 
 DWORD
 WINAPI
@@ -301,7 +259,8 @@ Return Value:
 
                 ScreenDump( pLogRecord->SequenceNumber,
                             pLogRecord->Name,
-                            pRecordData );
+                            pRecordData,
+                            context);
             }
 
             if (context->LogToFile) {
@@ -1109,12 +1068,58 @@ Return Value:
     fprintf( File, "\n" );
 }
 
+void ConvertNtPathToWin32(const WCHAR* ntPath, WCHAR* outPath) {
+    WCHAR drive[] = L"A:";
+    WCHAR ntDevice[MAX_PATH];
+
+    // Loop dari A: sampai Z: untuk mencari kecocokan device
+    for (drive[0] = L'A'; drive[0] <= L'Z'; drive[0]++) {
+        // QueryDosDevice mengubah "C:" menjadi "\Device\HarddiskVolume2"
+        if (QueryDosDeviceW(drive, ntDevice, MAX_PATH)) {
+            size_t len = wcslen(ntDevice);
+
+            // Jika ntPath diawali dengan string ntDevice yang ditemukan
+            if (_wcsnicmp(ntPath, ntDevice, len) == 0) {
+                // Gabungkan Drive Letter (C:) dengan sisa path-nya
+                swprintf_s(outPath, MAX_PATH, L"%s%s", drive, ntPath + len);
+                return;
+            }
+        }
+    }
+    // Jika gagal (misal: path di network atau ramdisk), salin apa adanya
+    wcscpy_s(outPath, MAX_PATH, ntPath);
+}
+
+
+HRESULT
+SendSig(
+    _In_ HANDLE Port,
+    _In_ ULONG Pid,
+    _In_ INT S
+)
+{
+    MINISPY_COMMAND_MSG msg;
+    DWORD bytesReturned;
+
+    msg.Command = COMMAND_SIG_STATUS;
+    msg.PID = Pid;
+    msg.IsSigned = S;
+    printf("Mengirim status exe...\n");
+
+    return FilterSendMessage(Port,
+        &msg,
+        sizeof(MINISPY_COMMAND_MSG),
+        NULL,
+        0,
+        &bytesReturned);
+}
 
 VOID
 ScreenDump(
     _In_ ULONG SequenceNumber,
     _In_ WCHAR CONST *Name,
-    _In_ PRECORD_DATA RecordData
+    _In_ PRECORD_DATA RecordData,
+    _In_ PLOG_CONTEXT Context
     )
 /*++
 Routine Description:
@@ -1154,6 +1159,34 @@ Return Value:
     //  Display informatoin
     //
     printf("=========================================================\n");
+    const WCHAR* input = Name;
+    WCHAR hasil[MAX_PATH];
+    ConvertNtPathToWin32(input, hasil);
+    printf("Hasil Konversi: %S\n", input);
+    printf("Hasil Konversi: %S\n", hasil);
+    WCHAR command[1024];
+    char buffer[128];
+    swprintf_s(command, 1024, L"powershell -NoProfile -Command \"(Get-AuthenticodeSignature '%ls').Status.ToString()\"", hasil);
+
+    FILE* fp = _wpopen(command, L"r");
+    if (fp != NULL) {
+        if (fgets(buffer, sizeof(buffer), fp) != NULL) {
+            buffer[strcspn(buffer, "\r\n")] = 0;
+            printf("Debug: Buffer berisi [%s]\n", buffer);
+
+            HRESULT hResult = S_OK;
+            if (strcmp(buffer, "Valid") == 0) {
+                printf("Hasil: SIGNATURE VALID\n");
+                hResult = SendSig(Context->Port, (ULONG)RecordData->ProcessId, 1);
+            }
+            else {
+                printf("Hasil: SIGNATURE TIDAK VALID / UNSIGNED\n");
+                hResult = SendSig(Context->Port, (ULONG)RecordData->ProcessId, 0);
+            }
+        }
+        _pclose(fp);
+    }
+
     printf("Operation: ");
     if (RecordData->Flags & FLT_CALLBACK_DATA_IRP_OPERATION) {
 

@@ -129,6 +129,8 @@ typedef struct _PROCESS_STATS {
     ULONG FileRenameCount;  // Counter untuk Rename (BARU)
     LARGE_INTEGER LastResetTime; // Kapan terakhir counter di-reset
     BOOLEAN IsWhitelisted;
+    INT IsSigned;
+    UNICODE_STRING ImagePath;
     LIST_ENTRY ListEntry;       // Untuk menyambung ke linked list
 } PROCESS_STATS, * PPROCESS_STATS;
 // =============================================================
@@ -196,7 +198,7 @@ KGUARDED_MUTEX g_WhitelistLock;
 LIST_ENTRY g_ProcessStatsList;
 KGUARDED_MUTEX g_StatsLock;
 
-// Fungsi Inisialisasi (Panggil di DriverEntr
+
 typedef struct _MINISPY_DATA {
 
     //
@@ -511,6 +513,11 @@ NTSYSAPI
 PCHAR
 NTAPI
 PsGetProcessImageFileName(
+    _In_ PEPROCESS Process
+);
+NTKERNELAPI
+UCHAR
+PsGetProcessSignatureLevel(
     _In_ PEPROCESS Process
 );
 #endif  //__MSPYKERN_H__

@@ -186,13 +186,16 @@ typedef enum _MINISPY_COMMAND {
     GetMiniSpyLog,
     GetMiniSpyVersion,
     COMMAND_CLEAR_TARGETS,  // <--- Tambahan Baru
-    COMMAND_ADD_TARGET      // <--- Tambahan Baru
+    COMMAND_ADD_TARGET,      // <--- Tambahan Baru
+    COMMAND_SIG_STATUS
 } MINISPY_COMMAND;
 
 // Struktur pesan untuk mengirim target dari User ke Kernel
 typedef struct _MINISPY_COMMAND_MSG {
     MINISPY_COMMAND Command;    // Tipe perintah (diambil dari enum di atas)
     WCHAR NameBuffer[260];      // Path target
+    ULONG PID;
+    INT IsSigned;
 } MINISPY_COMMAND_MSG, * PMINISPY_COMMAND_MSG;
 //
 //  Defines the command structure between the utility and the filter.

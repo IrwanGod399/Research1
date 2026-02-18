@@ -68,7 +68,8 @@ VOID
 ScreenDump(
     _In_ ULONG SequenceNumber,
     _In_ WCHAR CONST *Name,
-    _In_ PRECORD_DATA RecordData
+    _In_ PRECORD_DATA RecordData,
+    _In_ PLOG_CONTEXT Context
     );
 
 //
