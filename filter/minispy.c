@@ -74,8 +74,6 @@ CoreSentinelWorkItemRoutine(
     _In_ PVOID FltObjects, // Tidak kita gunakan
     _In_ PVOID Context     // Ini adalah pointer ke struct kita
 );
-VOID ClearTargetList(VOID);
-NTSTATUS AddTargetToList(WCHAR* PathBuffer);
 
 
 NTSYSAPI
@@ -114,34 +112,30 @@ BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
 
     KeAcquireGuardedMutex(&g_WhitelistLock);
 
-    // Loop dari awal sampai akhir list
+
     for (entry = g_WhitelistHead.Flink; entry != &g_WhitelistHead; entry = entry->Flink) {
         pEntry = CONTAINING_RECORD(entry, WHITELIST_ENTRY, ListEntry);
 
-        // Bandingkan String (TRUE = Case Insensitive / Huruf Besar Kecil Dianggap Sama)
+
         if (RtlEqualUnicodeString(Path, &pEntry->ImagePath, TRUE)) {
             isDuplicate = TRUE;
-            break; // KETEMU! Path ini sudah ada.
+            break; 
         }
     }
 
-    // Jika Duplikat, Lepas Lock dan Keluar
     if (isDuplicate) {
         KeReleaseGuardedMutex(&g_WhitelistLock);
-        // Optional Debug:
          DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [SKIP] Duplicate Path: %wZ\n", Path);
         return FALSE;
     }
 
-    // 1. Alokasi Node List
     pEntry = (PWHITELIST_ENTRY)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WHITELIST_ENTRY), 'wlst');
     if (!pEntry) return FALSE;
 
     RtlZeroMemory(pEntry, sizeof(WHITELIST_ENTRY));
 
-    // 2. Alokasi Buffer String (PENTING: Kita harus copy stringnya, bukan cuma pointernya)
     pEntry->ImagePath.Length = Path->Length;
-    pEntry->ImagePath.MaximumLength = Path->Length + sizeof(WCHAR); // +Null Terminator
+    pEntry->ImagePath.MaximumLength = Path->Length + sizeof(WCHAR);
     pEntry->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, pEntry->ImagePath.MaximumLength, 'str');
 
     if (!pEntry->ImagePath.Buffer) {
@@ -149,15 +143,12 @@ BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
         return FALSE;
     }
 
-    // 3. Copy String
     RtlCopyMemory(pEntry->ImagePath.Buffer, Path->Buffer, Path->Length);
     pEntry->ImagePath.Buffer[Path->Length / sizeof(WCHAR)] = L'\0'; // Null Terminate
 
-    // 4. Masukkan ke List (Thread Safe)
     InsertHeadList(&g_WhitelistHead, &pEntry->ListEntry);
     KeReleaseGuardedMutex(&g_WhitelistLock);
 
-    // Debug Print (Biar kelihatan path apa saja yang masuk)
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [WHITELIST ADD] %wZ\n", &pEntry->ImagePath);
     return TRUE;
 }
@@ -175,10 +166,8 @@ VOID WhitelistExistingProcesses() {
     PUNICODE_STRING pPathName = NULL;
     KeQuerySystemTime(&currentTime);
 
-    // 1. Cek ukuran buffer yang dibutuhkan
     status = ZwQuerySystemInformation(SystemProcessInformation, NULL, 0, &returnLength);
     if (status != STATUS_INFO_LENGTH_MISMATCH && !NT_SUCCESS(status)) return;
-    // 2. Alokasi Buffer (Tambah sedikit extra space biar aman)
     bufferSize = returnLength + 4096;
     buffer = ExAllocatePool2(POOL_FLAG_PAGED, bufferSize, 'snap');
 
@@ -186,15 +175,14 @@ VOID WhitelistExistingProcesses() {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: Gagal Alokasi Memori!\n");
         return;
     }
-    // 3. Ambil Snapshot Process
     status = ZwQuerySystemInformation(SystemProcessInformation, buffer, bufferSize, &returnLength);
     
     if (NT_SUCCESS(status)) {
         pInfo = (PSYSTEM_PROCESS_INFORMATION)buffer;
         
-        // Kunci Mutex agar aman
+
         KeAcquireGuardedMutex(&g_StatsLock);
-        // 4. LOOPING SEMUA PID
+
         while (TRUE) {
             HANDLE pid = pInfo->UniqueProcessId;
             if ((ULONG)(ULONG_PTR)pid > 4) {
@@ -207,7 +195,6 @@ VOID WhitelistExistingProcesses() {
                         ExFreePool(pPathName);
                     }
 
-                    // E. PENTING: Lepaskan Object Reference (Biar gak Memory Leak)
                     ObDereferenceObject(eProcess);
                 }
             }
@@ -256,9 +243,6 @@ Return Value:
 
     try {
 
-        //
-        // Initialize global data structures.
-        //
 
         MiniSpyData.LogSequenceNumber = 0;
         MiniSpyData.MaxRecordsToAllocate = DEFAULT_MAX_RECORDS_TO_ALLOCATE;
@@ -525,10 +509,10 @@ PPROCESS_STATS GetList(PUNICODE_STRING Path) {
     PLIST_ENTRY entry;
     PPROCESS_STATS pStats = NULL;
 
-    // Kunci List agar Thread Safe
+
     KeAcquireGuardedMutex(&g_StatsLock);
 
-    // 1. CARI APAKAH PID SUDAH ADA DI LIST?
+
     for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
         PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
         if (RtlEqualUnicodeString(Path, &candidate->ImagePath, TRUE)) {
@@ -540,7 +524,9 @@ PPROCESS_STATS GetList(PUNICODE_STRING Path) {
     KeReleaseGuardedMutex(&g_StatsLock);
     return pStats;
 }
-
+BOOLEAN mP = FALSE;
+BOOLEAN mD = FALSE;
+LARGE_INTEGER sTime;
 NTSTATUS
 SpyMessage (
     _In_ PVOID ConnectionCookie,
@@ -621,6 +607,37 @@ Return Value:
         }
 
         switch (command) {
+            case COMMAND_SWITCH_MODE:
+                try {
+                    PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
+                    LARGE_INTEGER cTime;
+                    KeQuerySystemTime(&cTime);
+                    sTime = cTime;
+                    if (msg->Mode == 1) {
+                        if (mP == TRUE) {
+                            mP = FALSE;
+                        }
+                        else {
+                            mP = TRUE;
+                        }
+                        mD = FALSE;
+                    }
+                    else if (msg->Mode == 2) {
+                        if (mD == TRUE) {
+                            mD = FALSE;
+                        }
+                        else {
+                            mD = TRUE;
+                        }
+                        mP = FALSE;
+                    }
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Status: mP:%u mD:%u\n", mP, mD);
+                }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
+                    status = GetExceptionCode();
+                }
+                status = STATUS_SUCCESS;
+                break;
+
             case COMMAND_SIG_STATUS:
                 try {
                     PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
@@ -632,7 +649,8 @@ Return Value:
                     if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)Pid, &eProcess))) {
                         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
                             PPROCESS_STATS test = GetList(pPathName);
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ ,Signed: %d\n", test->ImagePath, IsSigned);
+                            test->IsSigned = IsSigned;
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ ,Signed: %d\n", test->ImagePath, test->IsSigned);
                         }
                     }
                     
@@ -642,46 +660,6 @@ Return Value:
                 }
 
                 status = STATUS_SUCCESS;
-                break;
-            case COMMAND_CLEAR_TARGETS: // Biasanya didefinisikan sbg 2
-
-                // Panggil fungsi helper yang sudah kita buat sebelumnya
-                ClearTargetList();
-                DbgPrint("CoreSentinel: Perintah CLEAR diterima dari User.\n");
-                status = STATUS_SUCCESS;
-                break;
-
-            case COMMAND_ADD_TARGET: // Biasanya didefinisikan sbg 3
-
-                // 1. Cek Validasi Ukuran Buffer
-                // Kita butuh buffer sebesar struct MINISPY_COMMAND_MSG
-                if (InputBufferSize < sizeof(MINISPY_COMMAND_MSG)) {
-                    status = STATUS_BUFFER_TOO_SMALL;
-                    break;
-                }
-
-                try {
-                    // 2. Casting buffer ke struct kita
-                    PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
-
-                    // 3. Safety: Paksa karakter terakhir jadi NULL (Mencegah buffer overflow)
-                    // Asumsi NameBuffer ukuran 260 WCHAR
-                    msg->NameBuffer[259] = L'\0';
-
-                    // 4. Panggil fungsi helper untuk memasukkan ke Linked List
-                    // Pastikan fungsi AddTargetToList sudah ada di file ini atau di-include
-                    status = AddTargetToList(msg->NameBuffer);
-
-                    if (NT_SUCCESS(status)) {
-                        DbgPrint("CoreSentinel: Target baru ditambahkan: %ws\n", msg->NameBuffer);
-                    }
-                    else {
-                        DbgPrint("CoreSentinel: Gagal menambah target. Status: 0x%x\n", status);
-                    }
-
-                } except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
-                    status = GetExceptionCode();
-                }
                 break;
             case GetMiniSpyLog:
 
@@ -809,68 +787,82 @@ Return Value:
 //---------------------------------------------------------------------------
 //              Operation filtering routines
 //---------------------------------------------------------------------------
-// Fungsi untuk menghapus semua isi list (Reset)
-VOID ClearTargetList() {
-    PLIST_ENTRY entry;
-    PTARGET_ENTRY targetEntry;
+BOOLEAN Prunning(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects
+) {
+    PRECORD_LIST recordList;
+    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
+    NTSTATUS status;
+    PUNICODE_STRING nameToUse;
+    UNICODE_STRING unknownName = RTL_CONSTANT_STRING(L"UNKNOWN");
 
-    ExAcquireFastMutex(&g_TargetListLock);
+#if MINISPY_VISTA
+    PUNICODE_STRING ecpDataToUse = NULL;
+    UNICODE_STRING ecpData;
+    WCHAR ecpDataBuffer[MAX_NAME_SPACE / sizeof(WCHAR)];
+#endif
 
-    while (!IsListEmpty(&g_TargetListHead)) {
-        // Ambil item pertama lalu hapus dari rantai
-        entry = RemoveHeadList(&g_TargetListHead);
-
-        // Dapatkan pointer ke struct aslinya
-        targetEntry = CONTAINING_RECORD(entry, TARGET_ENTRY, ListEntry);
-
-        // Bebaskan memori string buffer
-        if (targetEntry->FileName.Buffer) {
-            ExFreePool(targetEntry->FileName.Buffer);
-        }
-
-        // Bebaskan memori struct itu sendiri
-        ExFreePool(targetEntry);
+    recordList = SpyNewRecord();
+    if (!recordList) {
+        return FALSE;
     }
 
-    ExReleaseFastMutex(&g_TargetListLock);
-}
+    status = FltGetFileNameInformation(Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &nameInfo);
+    PEPROCESS pProcess = NULL;
+    HANDLE ProcessId = (HANDLE)FltGetRequestorProcessId(Data);
 
-// Fungsi untuk menambah target baru
-NTSTATUS AddTargetToList(WCHAR* PathBuffer) {
-    PTARGET_ENTRY newEntry;
-    SIZE_T strLen;
-    SIZE_T strSize;
+    NTSTATUS nameStatus = PsLookupProcessByProcessId(ProcessId, &pProcess);
+    if (NT_SUCCESS(nameStatus)) {
+        PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
+        RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "SendToUser Process: %s\n", imageName);
+        ObDereferenceObject(pProcess);
+    }
+    PUNICODE_STRING pImageName = NULL;
+    NTSTATUS path = SeLocateProcessImageName(pProcess, &pImageName);
+    if (NT_SUCCESS(path) && pImageName != NULL) {
+        nameToUse = pImageName;
+        ExFreePool(pImageName);
+    }
+    else {
+        nameToUse = &unknownName;
+    }
+    Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+    Data->IoStatus.Information = 0;
 
-    strLen = wcslen(PathBuffer);
-    strSize = (strLen + 1) * sizeof(WCHAR);
 
-    // [SOLUSI] Gunakan ExAllocatePoolZero
-    // Perhatikan: Parameternya kembali menggunakan 'NonPagedPool' (bukan POOL_FLAG_...)
-    newEntry = (PTARGET_ENTRY)ExAllocatePoolZero(NonPagedPool, sizeof(TARGET_ENTRY), 'tgT1');
+#if MINISPY_VISTA
 
-    if (!newEntry) return STATUS_INSUFFICIENT_RESOURCES;
+    if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
+        RtlInitEmptyUnicodeString(&ecpData,
+            ecpDataBuffer,
+            MAX_NAME_SPACE / sizeof(WCHAR));
 
-    // Alokasi buffer string
-    newEntry->FileName.Buffer = (PWCH)ExAllocatePoolZero(NonPagedPool, strSize, 'tgT2');
-
-    if (!newEntry->FileName.Buffer) {
-        ExFreePool(newEntry);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        SpyParseEcps(Data, recordList, &ecpData);
+        ecpDataToUse = &ecpData;
     }
 
-    // Salin data string
-    newEntry->FileName.Length = (USHORT)(strLen * sizeof(WCHAR));
-    newEntry->FileName.MaximumLength = (USHORT)strSize;
-    RtlCopyMemory(newEntry->FileName.Buffer, PathBuffer, strSize);
 
-    // Masukkan ke Linked List
-    ExAcquireFastMutex(&g_TargetListLock);
-    InsertTailList(&g_TargetListHead, &newEntry->ListEntry);
-    ExReleaseFastMutex(&g_TargetListLock);
+    SpySetRecordNameAndEcpData(&(recordList->LogRecord), nameToUse, ecpDataToUse);
+#else
 
-    return STATUS_SUCCESS;
+    SpySetRecordName(&(recordList->LogRecord), nameToUse);
+#endif
+
+    if (nameInfo != NULL) {
+        FltReleaseFileNameInformation(nameInfo);
+    }
+    recordList->LogRecord.Data.Status = Data->IoStatus.Status;
+    SpyLogPreOperationData(Data, FltObjects, recordList);
+    SpyLog(recordList);
+
+    return TRUE;
 }
-//=======================================================================================================================
+
+
 BOOLEAN SendToUserSpace(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ PCFLT_RELATED_OBJECTS FltObjects
@@ -879,7 +871,7 @@ BOOLEAN SendToUserSpace(
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     NTSTATUS status;
     PUNICODE_STRING nameToUse;
-    UNICODE_STRING unknownName = RTL_CONSTANT_STRING(L"<UNKNOWN>");
+    UNICODE_STRING unknownName = RTL_CONSTANT_STRING(L"UNKNOWN");
 
 #if MINISPY_VISTA
     PUNICODE_STRING ecpDataToUse = NULL;
@@ -887,29 +879,22 @@ BOOLEAN SendToUserSpace(
     WCHAR ecpDataBuffer[MAX_NAME_SPACE / sizeof(WCHAR)];
 #endif
 
-    // 1. Alokasikan record log
     recordList = SpyNewRecord();
     if (!recordList) {
         return FALSE;
     }
 
-    // 2. Ambil Nama File
     status = FltGetFileNameInformation(Data,
         FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
         &nameInfo);
     PEPROCESS pProcess = NULL;
     HANDLE ProcessId = (HANDLE)FltGetRequestorProcessId(Data);
-    ULONG nPid = HandleToUlong(ProcessId);
 
-    // 3. Cetak sebagai angka desimal (%u)
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID,
-        DPFLTR_ERROR_LEVEL,
-        "SendUser: PID %u\n",
-        nPid);
     NTSTATUS nameStatus = PsLookupProcessByProcessId(ProcessId, &pProcess);
     if (NT_SUCCESS(nameStatus)) {
         PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
         RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "SendToUser Process: %s\n", imageName);
         ObDereferenceObject(pProcess);
     }
     PUNICODE_STRING pImageName = NULL;
@@ -922,8 +907,9 @@ BOOLEAN SendToUserSpace(
         nameToUse = &unknownName;
     }
 
+
 #if MINISPY_VISTA
-    // 4. Proses ECP (Hanya jika CREATE)
+
     if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
         RtlInitEmptyUnicodeString(&ecpData,
             ecpDataBuffer,
@@ -933,19 +919,17 @@ BOOLEAN SendToUserSpace(
         ecpDataToUse = &ecpData;
     }
 
-    // 5. Simpan Nama + ECP
+
     SpySetRecordNameAndEcpData(&(recordList->LogRecord), nameToUse, ecpDataToUse);
 #else
-    // 5. Simpan Nama saja
+
     SpySetRecordName(&(recordList->LogRecord), nameToUse);
 #endif
 
-    // 6. Bersihkan Resource
     if (nameInfo != NULL) {
         FltReleaseFileNameInformation(nameInfo);
     }
 
-    // 7. Isi data operasi lainnya & Kirim
     SpyLogPreOperationData(Data, FltObjects, recordList);
     SpyLog(recordList);
 
@@ -953,27 +937,28 @@ BOOLEAN SendToUserSpace(
 }
 
 
-
-
-BOOLEAN Check(
+BOOLEAN Profiling(
     PUNICODE_STRING Path,
     OP_TYPE OpType,
     _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_ PCFLT_RELATED_OBJECTS FltObjects
-)
+    _In_ PCFLT_RELATED_OBJECTS FltObjects)
 {
-
     PLIST_ENTRY entry;
     PPROCESS_STATS pStats = NULL;
-    BOOLEAN isRansomware = FALSE;
     LARGE_INTEGER currentTime;
+    ULONG Topen = 0;
+    ULONG Trename = 0;
+    ULONG Tproc = 0;
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(FltObjects);
+
 
     KeQuerySystemTime(&currentTime);
 
-    // Kunci List agar Thread Safe
+
     KeAcquireGuardedMutex(&g_StatsLock);
 
-    // 1. CARI APAKAH PID SUDAH ADA DI LIST?
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Mulai\n");
     for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
         PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
         if (RtlEqualUnicodeString(Path, &candidate->ImagePath, TRUE)) {
@@ -982,7 +967,6 @@ BOOLEAN Check(
         }
     }
 
-    // 2. JIKA BELUM ADA, BUAT BARU
     if (pStats == NULL) {
         pStats = (PPROCESS_STATS)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PROCESS_STATS), 'stat');
         if (pStats) {
@@ -993,17 +977,103 @@ BOOLEAN Check(
                 RtlCopyUnicodeString(&pStats->ImagePath, Path);
                 DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", pStats->ImagePath);
             }
-            pStats->FileOpenCount = 1;
             pStats->LastResetTime = currentTime;
-            SendToUserSpace(Data, FltObjects);
+            InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
+        }
+    }
+    else {
+        LONGLONG diff = currentTime.QuadPart - sTime.QuadPart;
+        if (diff > 100000000) {
+            for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
+                PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
+                if (candidate->FileOpenCount > 0) {
+                    Topen += candidate->FileOpenCount;
+                }
+                if (candidate->FileRenameCount > 0) {
+                    Trename += candidate->FileRenameCount;
+                }
+                Tproc++;
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "P ke: %d\n", Tproc);
+            }
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Topen: %d\n", Tproc);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Topen: %d\n", Topen);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Trename: %d\n", Trename);
+            pStats->LastResetTime = currentTime;
+            if (OpType == OP_TYPE_OPEN) {
+                pStats->FileOpenCount = 0;
+                pStats->FileRenameCount = 0;
+            }
+            else {
+                pStats->FileOpenCount = 0;
+                pStats->FileRenameCount = 0;
+            }
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "KONTOOTMOT\n");
+            mP = FALSE;
+            mD = FALSE;
+        }
+        else {
+            if (OpType == OP_TYPE_OPEN) {
+                pStats->FileOpenCount++;
+            }
+            else if (OpType == OP_TYPE_RENAME) {
+                pStats->FileRenameCount++;
+            }
+        }
+    }
+
+    KeReleaseGuardedMutex(&g_StatsLock);
+    return TRUE;
+
+}
+
+BOOLEAN Check(
+    PUNICODE_STRING Path,
+    OP_TYPE OpType,
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects
+)
+{
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(FltObjects);
+    PLIST_ENTRY entry;
+    PPROCESS_STATS pStats = NULL;
+    BOOLEAN isRansomware = FALSE;
+    LARGE_INTEGER currentTime;
+
+    KeQuerySystemTime(&currentTime);
+
+
+    KeAcquireGuardedMutex(&g_StatsLock);
+
+
+    for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
+        PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
+        if (RtlEqualUnicodeString(Path, &candidate->ImagePath, TRUE)) {
+            pStats = candidate;
+            break;
+        }
+    }
+
+    if (pStats == NULL) {
+        pStats = (PPROCESS_STATS)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PROCESS_STATS), 'stat');
+        if (pStats) {
+            RtlZeroMemory(pStats, sizeof(PROCESS_STATS));
+            pStats->ImagePath.MaximumLength = Path->MaximumLength;
+            pStats->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, Path->MaximumLength, 'pstr');
+            if (pStats->ImagePath.Buffer) {
+                RtlCopyUnicodeString(&pStats->ImagePath, Path);
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", pStats->ImagePath);
+            }
+            pStats->LastResetTime = currentTime;
+            pStats->IsSigned = -1;
+            //SendToUserSpace(Data, FltObjects);
             InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
         }
     }
     else {
         LONGLONG diff = currentTime.QuadPart - pStats->LastResetTime.QuadPart;
+        if (diff > RESET_INTERVAL_TICKS && pStats->IsSigned != -1) {
 
-        if (diff > RESET_INTERVAL_TICKS) {
-            // Sudah lebih dari 1 detik, reset counter
             pStats->LastResetTime = currentTime;
             if (OpType == OP_TYPE_OPEN) {
                 pStats->FileOpenCount = 1;
@@ -1015,7 +1085,7 @@ BOOLEAN Check(
             }
         }
         else {
-            // Masih dalam detik yang sama, tambah counter
+
             if (OpType == OP_TYPE_OPEN) {
                 pStats->FileOpenCount++;
             }
@@ -1023,18 +1093,26 @@ BOOLEAN Check(
                 pStats->FileRenameCount++;
             }
         }
-
-        // 4. CEK THRESHOLD (DETEKSI RANSOMWARE)
-        if (pStats->FileOpenCount > MAX_FILE_OPENS_PER_SECOND) {
-            isRansomware = TRUE;
-            // Reset biar ga spam log berkali-kali setelah terdeteksi
-            pStats->FileOpenCount = 0;
+        ULONG Fopen = (pStats->FileOpenCount * 100) / 50;
+        if (Fopen > 100) Fopen = 100;
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Fopen: %u\n", Fopen);
+        ULONG Frename = (pStats->FileRenameCount * 100) / 5;
+        if (Frename > 100) Frename = 100;
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Frename: %u\n", Frename);
+        if (pStats->IsSigned == 1) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 1 Path: %wZ\n", pStats->ImagePath);
+        }else if(pStats->IsSigned == 0){
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 0 Path: %wZ\n", pStats->ImagePath);
         }
-        if (pStats->FileRenameCount > MAX_FILE_RENAMES_PER_SECOND) {
+        if (pStats->FileOpenCount > MAX_FILE_OPENS_PER_SECOND ||
+            pStats->FileRenameCount > MAX_FILE_RENAMES_PER_SECOND) {
             isRansomware = TRUE;
+            pStats->FileOpenCount = 0;
             pStats->FileRenameCount = 0;
         }
     }
+  
+
 
     KeReleaseGuardedMutex(&g_StatsLock);
     return isRansomware;
@@ -1047,18 +1125,17 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
     NTSTATUS status;
     PLIST_ENTRY entry;
     PWHITELIST_ENTRY pEntry;
-    // A. SYSTEM IDLE & SYSTEM (PID 0 & 4)
+
     if (ProcessId <= 4) return TRUE;
 
-    // B. Lookup Process
+
     status = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
     if (!NT_SUCCESS(status)) return FALSE;
-    // C. Get Full Path
+
     status = SeLocateProcessImageName(pProcess, &pImageName);
 
     
 
-    // Loop dari awal list sampai akhir
 
     if (NT_SUCCESS(status) && pImageName != NULL) {
         KeAcquireGuardedMutex(&g_WhitelistLock);
@@ -1067,12 +1144,11 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
 
             if (RtlEqualUnicodeString(pImageName, &pEntry->ImagePath, TRUE)) {
                 isSafe = TRUE;
-                break; // KETEMU! Path ini aman.
+                break; 
             }
         }
 
         KeReleaseGuardedMutex(&g_WhitelistLock);
-        // Bersihkan Memori
         ExFreePool(pImageName);
     }
 
@@ -1095,9 +1171,6 @@ SpyPreOperationCallback(
     NTSTATUS nameStatus;
 
 
-    // ==========================================================
-    // 4. LOGIKA HEURISTIC (Hanya dijalankan untuk operasi Tulis)
-    // ==========================================================
     ProcessId = FltGetRequestorProcessId(Data);
     PEPROCESS eProcess = NULL;
     PUNICODE_STRING pPathName = NULL;
@@ -1106,7 +1179,7 @@ SpyPreOperationCallback(
         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
             if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
 
-                // 3. Whitelist System (PENTING)
+
                 if (ProcessId <= 4) {
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
@@ -1114,61 +1187,59 @@ SpyPreOperationCallback(
                 if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation) {
                     //========================================================================================================
                     if (IsProcessWhitelisted(ProcessId)) {
-                        // Semua yang dari System32 BOLEH lewat.
-                        // Tidak perlu dicek rename atau open count-nya.
+
                         return FLT_PREOP_SUCCESS_NO_CALLBACK;
                     }
-                    // Panggil Helper dengan tipe RENAME
-                    if (Check(pPathName, OP_TYPE_RENAME, Data, FltObjects)) {
+                    if (mP == TRUE) {
+                        if (Profiling(pPathName, OP_TYPE_RENAME, Data, FltObjects)) {
+                            return FLT_PREOP_COMPLETE;
+                        }
+                    }
+                    else if (mD == TRUE) {
+                        if (Check(pPathName, OP_TYPE_RENAME, Data, FltObjects)) {
+                            PEPROCESS pProcess = NULL;
+                            PCHAR procName = "Unknown";
+                            nameStatus = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
+                            PPROCESS_STATS test = GetList(pPathName);
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ\n", test->ImagePath);
+                            if (NT_SUCCESS(nameStatus)) {
 
-                        // --- BAGIAN MENCARI NAMA PROCESS ---
-                        PEPROCESS pProcess = NULL;
-                        PCHAR procName = "Unknown";
-                        // 1. Ambil Object Process berdasarkan PID
-                        nameStatus = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
-                        PPROCESS_STATS test = GetList(pPathName);
-                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ\n", test->ImagePath);
-                        if (NT_SUCCESS(nameStatus)) {
-                            // 2. Ambil Nama Image (File Name)
-                            // PsGetProcessImageFileName mengembalikan pointer ke string char* biasa
-                            procName = (PCHAR)PsGetProcessImageFileName(pProcess);
-                            HANDLE hProcess = NULL;
-                            NTSTATUS termStatus;
+                                procName = (PCHAR)PsGetProcessImageFileName(pProcess);
+                                HANDLE hProcess = NULL;
+                                NTSTATUS termStatus;
 
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [BLOCK] MASS RENAME! Process: %s (PID: %d)\n", procName, ProcessId);
-                            termStatus = ObOpenObjectByPointer(pProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
-                            if (NT_SUCCESS(termStatus)) {
-                                ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
-                                ZwClose(hProcess);
+                                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [BLOCK] MASS RENAME! Process: %s (PID: %d)\n", procName, ProcessId);
+                                termStatus = ObOpenObjectByPointer(pProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
+                                if (NT_SUCCESS(termStatus)) {
+                                    ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
+                                    ZwClose(hProcess);
+                                }
+
+                                ObDereferenceObject(pProcess);
                             }
-                            // 4. [WAJIB] KURANGI REFERENCE COUNT
-                            // Kalau lupa baris ini = MEMORY LEAK (BSOD jangka panjang)
-                            ObDereferenceObject(pProcess);
-                        }
-                        else {
-                            // Fallback jika gagal lookup process (misal process sudah mati duluan)
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                                "CoreSentinel: [BLOCK] RANSOMWARE DETECTED! PID: %d\n", ProcessId);
-                        }
+                            else {
 
-                        // --- BLOKIR AKSES ---
-                        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
-                        Data->IoStatus.Information = 0;
-                        return FLT_PREOP_COMPLETE;
+                                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                                    "CoreSentinel: [BLOCK] RANSOMWARE DETECTED! PID: %d\n", ProcessId);
+                            }
+
+                            Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+                            Data->IoStatus.Information = 0;
+                            Prunning(Data, FltObjects);
+                            return FLT_PREOP_COMPLETE;
+                        }
                     }
                 }
                 return FLT_PREOP_SUCCESS_NO_CALLBACK;
             }
             if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
 
-                // 3. Whitelist System (PENTING)
+
                 if (ProcessId <= 4) {
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
                 DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
 
-                // Cek apakah ada niat jahat (Write, Append, Delete, atau Generic Write)
-                // Jika hanya Read (FILE_READ_DATA, GENERIC_READ), kita abaikan!
                 BOOLEAN isWriteOperation = (DesiredAccess & (FILE_WRITE_DATA |
                     FILE_APPEND_DATA |
                     DELETE |
@@ -1179,45 +1250,48 @@ SpyPreOperationCallback(
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
                 if (IsProcessWhitelisted(ProcessId)) {
-                    // Semua yang dari System32 BOLEH lewat.
-                    // Tidak perlu dicek rename atau open count-nya.
+
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
-                if (Check(pPathName, OP_TYPE_OPEN, Data, FltObjects)) {
-                    PEPROCESS pProcess = NULL;
-                    PCHAR procName = "Unknown";
-                    // 1. Ambil Object Process berdasarkan PID
-                    nameStatus = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
-                    PPROCESS_STATS test = GetList(pPathName);
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path2: %wZ\n", test->ImagePath);
-                    if (NT_SUCCESS(nameStatus)) {
-                        // 2. Ambil Nama Image (File Name)
-                        // PsGetProcessImageFileName mengembalikan pointer ke string char* biasa
-                        procName = (PCHAR)PsGetProcessImageFileName(pProcess);
-                        HANDLE hProcess = NULL;
-                        NTSTATUS termStatus;
-
-                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [BLOCK] MASS OPEN! Process: %s (PID: %d)\n", procName, ProcessId);
-                        termStatus = ObOpenObjectByPointer(pProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
-                        if (NT_SUCCESS(termStatus)) {
-                            ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
-                            ZwClose(hProcess);
-                        }
-                        // 4. [WAJIB] KURANGI REFERENCE COUNT
-                        // Kalau lupa baris ini = MEMORY LEAK (BSOD jangka panjang)
-                        ObDereferenceObject(pProcess);
+                if (mP == TRUE) {
+                    if (Profiling(pPathName, OP_TYPE_RENAME, Data, FltObjects)) {
+                        return FLT_PREOP_COMPLETE;
                     }
-                    else {
-                        // Fallback jika gagal lookup process (misal process sudah mati duluan)
-                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                            "CoreSentinel: [BLOCK] RANSOMWARE DETECTED! PID: %d\n", ProcessId);
-                    }
-
-                    // --- BLOKIR AKSES ---
-                    Data->IoStatus.Status = STATUS_ACCESS_DENIED;
-                    Data->IoStatus.Information = 0;
-                    return FLT_PREOP_COMPLETE;
                 }
+                else if (mD == TRUE) {
+                    if (Check(pPathName, OP_TYPE_OPEN, Data, FltObjects)) {
+                        PEPROCESS pProcess = NULL;
+                        PCHAR procName = "Unknown";
+
+                        nameStatus = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
+                        PPROCESS_STATS test = GetList(pPathName);
+                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path2: %wZ\n", test->ImagePath);
+                        if (NT_SUCCESS(nameStatus)) {
+                            procName = (PCHAR)PsGetProcessImageFileName(pProcess);
+                            HANDLE hProcess = NULL;
+                            NTSTATUS termStatus;
+
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [BLOCK] MASS OPEN! Process: %s (PID: %d)\n", procName, ProcessId);
+                            termStatus = ObOpenObjectByPointer(pProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
+                            if (NT_SUCCESS(termStatus)) {
+                                ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
+                                ZwClose(hProcess);
+                            }
+
+                            ObDereferenceObject(pProcess);
+                        }
+                        else {
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                                "CoreSentinel: [BLOCK] RANSOMWARE DETECTED! PID: %d\n", ProcessId);
+                        }
+
+                        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+                        Data->IoStatus.Information = 0;
+                        Prunning(Data, FltObjects);
+                        return FLT_PREOP_COMPLETE;
+                    }
+                }
+
             }
             ExFreePool(pPathName);
         }
@@ -1515,103 +1589,6 @@ SpyDeleteTxfContext (
     FLT_ASSERT(Context->Count != 0);
 }
 
-//
-// Ini adalah implementasi dari fungsi "worker"
-//
-VOID
-CoreSentinelWorkItemRoutine(
-    _In_ PFLT_GENERIC_WORKITEM FltWorkItem,
-    _In_ PVOID FltObjects,
-    _In_ PVOID Context
-)
-{
-    UNREFERENCED_PARAMETER(FltObjects);
-
-    PCORE_SENTINEL_WORK_ITEM pWorkItem = (PCORE_SENTINEL_WORK_ITEM)Context;
-    PEPROCESS pProcess = NULL;
-    NTSTATUS status;
-
-    PAGED_CODE(); // Memverifikasi bahwa kita berada di PASSIVE_LEVEL
-
-    status = PsLookupProcessByProcessId(pWorkItem->ProcessId, &pProcess);
-
-    if (NT_SUCCESS(status)) {
-
-        PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
-        BOOLEAN isWhitelisted = FALSE;
-
-        if (imageName) {
-
-            // =======================================================
-            // == INI ADALAH KODE WHITELIST YANG BENAR (KERNEL-SAFE) ==
-            // =======================================================
-
-            // 1. Definisikan daftar whitelist Anda (sebagai ANSI/CHAR)
-            const CHAR* processWhitelist[] = {
-                "huhuhuh.exe"
-            };
-            ULONG whitelistCount = sizeof(processWhitelist) / sizeof(processWhitelist[0]);
-
-            // 2. Buat struct ANSI_STRING sementara untuk nama proses
-            ANSI_STRING ansiImageName;
-            RtlInitAnsiString(&ansiImageName, imageName); // Fungsi kernel
-
-            // 3. Loop dan bandingkan menggunakan cara kernel
-            for (ULONG i = 0; i < whitelistCount; i++) {
-
-                ANSI_STRING ansiWhitelistEntry;
-                RtlInitAnsiString(&ansiWhitelistEntry, processWhitelist[i]); // Fungsi kernel
-                BOOLEAN bIsEqual = RtlEqualString(&ansiImageName, &ansiWhitelistEntry, TRUE);
-                DbgPrint("CoreSentinel DEBUG: Comparing [%s] with [%s]. Result: %s\n",
-                    ansiImageName.Buffer,
-                    ansiWhitelistEntry.Buffer,
-                    bIsEqual ? "TRUE (MATCH)" : "FALSE");
-                // 4. Bandingkan (TRUE = case-insensitive)
-                if (RtlEqualString(&ansiImageName, &ansiWhitelistEntry, TRUE)) { // Fungsi kernel
-                    isWhitelisted = TRUE;
-                    break;
-                }
-            }
-            // =======================================================
-            // == AKHIR KODE WHITELIST ==
-            // =======================================================
-        }
-
-        //
-        // 5. Periksa hasilnya
-        //
-        if (!isWhitelisted) {
-
-            // Proses ini TIDAK ADA di whitelist. Hentikan.
-            HANDLE hProcess = NULL;
-
-            status = ObOpenObjectByPointer(
-                pProcess,
-                OBJ_KERNEL_HANDLE,
-                NULL,
-                PROCESS_TERMINATE,
-                *PsProcessType,
-                KernelMode,
-                &hProcess);
-
-            if (NT_SUCCESS(status)) {
-                DbgPrint("CoreSentinel: Terminating non-whitelisted process: %s\n", imageName ? imageName : "unknown");
-                ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
-                ZwClose(hProcess);
-            }
-        }
-        else {
-            // Proses ini ADA di whitelist. Biarkan.
-            DbgPrint("CoreSentinel: Whitelisted process allowed: %s\n", imageName);
-        }
-
-        // 6. Selalu lepaskan objek
-        ObDereferenceObject(pProcess);
-    }
-
-    // 7. Bersihkan memori "paket pekerjaan"
-    FltFreeGenericWorkItem(FltWorkItem);
-}
 
 LONG
 SpyExceptionFilter (

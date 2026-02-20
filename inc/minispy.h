@@ -185,9 +185,10 @@ typedef struct _RECORD_LIST {
 typedef enum _MINISPY_COMMAND {
     GetMiniSpyLog,
     GetMiniSpyVersion,
-    COMMAND_CLEAR_TARGETS,  // <--- Tambahan Baru
-    COMMAND_ADD_TARGET,      // <--- Tambahan Baru
-    COMMAND_SIG_STATUS
+    COMMAND_CLEAR_TARGETS,
+    COMMAND_ADD_TARGET,
+    COMMAND_SIG_STATUS,
+    COMMAND_SWITCH_MODE
 } MINISPY_COMMAND;
 
 // Struktur pesan untuk mengirim target dari User ke Kernel
@@ -196,6 +197,7 @@ typedef struct _MINISPY_COMMAND_MSG {
     WCHAR NameBuffer[260];      // Path target
     ULONG PID;
     INT IsSigned;
+    INT Mode;
 } MINISPY_COMMAND_MSG, * PMINISPY_COMMAND_MSG;
 //
 //  Defines the command structure between the utility and the filter.

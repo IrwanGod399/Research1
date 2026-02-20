@@ -226,18 +226,13 @@ Return Value:
 
             if (pRecordData->Status == 0xC0000022) {
 
-                // Pastikan ProcessName tidak kosong
                 if (pRecordData->ProcessName[0] != '\0') {
 
                     char killCommand[256];
 
                     printf("\n[!] ALERT: Driver Blocked Process: %s\n", pRecordData->ProcessName);
-
-                    // Menyusun perintah: taskkill /F /IM "nama_file.exe"
-                    // Gunakan tanda kutip (\") jaga-jaga ada spasi
                     sprintf_s(killCommand, 256, "taskkill /F /IM \"%s\" >nul 2>&1", pRecordData->ProcessName);
 
-                    // Eksekusi
                     system(killCommand);
                 }
             }
@@ -1172,8 +1167,6 @@ Return Value:
     if (fp != NULL) {
         if (fgets(buffer, sizeof(buffer), fp) != NULL) {
             buffer[strcspn(buffer, "\r\n")] = 0;
-            printf("Debug: Buffer berisi [%s]\n", buffer);
-
             HRESULT hResult = S_OK;
             if (strcmp(buffer, "Valid") == 0) {
                 printf("Hasil: SIGNATURE VALID\n");

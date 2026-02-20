@@ -311,6 +311,31 @@ SendClearTargets(
         0,
         &bytesReturned);
 }
+HRESULT
+Mode(
+    _In_ HANDLE Port,
+    _In_ INT s
+)
+{
+    MINISPY_COMMAND_MSG msg;
+    DWORD bytesReturned;
+
+    msg.Command = COMMAND_SWITCH_MODE;
+    msg.Mode = s;
+    if (s == 1) {
+        printf("Profiling...\n");
+    }
+    else {
+        printf("Detecting...\n");
+    }
+
+    return FilterSendMessage(Port,
+        &msg,
+        sizeof(MINISPY_COMMAND_MSG),
+        NULL,
+        0,
+        &bytesReturned);
+}
 //
 //  Main uses a loop which has an assignment in the while 
 //  conditional statement. Suppress the compiler's warning.
@@ -640,7 +665,14 @@ Return Value:
             //
 
             switch (parm[1]) {
-                case 'c': 
+            case 'p':
+                hResult = Mode(Context->Port, 1);
+                break;
+            case 'z':
+                hResult = Mode(Context->Port, 2);
+                break;
+
+            case 'c': 
             case 'C':
                 // Perintah: /c (Clear Targets)
                 hResult = SendClearTargets( Context->Port );

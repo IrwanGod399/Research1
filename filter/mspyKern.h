@@ -515,10 +515,5 @@ NTAPI
 PsGetProcessImageFileName(
     _In_ PEPROCESS Process
 );
-NTKERNELAPI
-UCHAR
-PsGetProcessSignatureLevel(
-    _In_ PEPROCESS Process
-);
 #endif  //__MSPYKERN_H__
 
