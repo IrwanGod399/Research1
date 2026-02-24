@@ -677,12 +677,14 @@ Return Value:
                 modeValue = atoi(parm);
 
                 hResult = Mode(Context->Port, 1, modeValue);
-
-                break;
+                returnValue = EXIT_INTERPRETER;
+                goto InterpretCommand_Exit;
             case 'z':
                 
                 hResult = Mode(Context->Port, 2, modeValue);
-                break;
+                returnValue = EXIT_INTERPRETER;
+                goto InterpretCommand_Exit;
+
 
             case 'c': 
             case 'C':

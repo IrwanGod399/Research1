@@ -33,6 +33,9 @@ _Analysis_mode_(_Analysis_code_type_user_code_)
 
 #define POLL_INTERVAL   200     // 200 milliseconds
 
+#pragma comment (lib, "wintrust.lib")
+
+
 BOOLEAN
 TranslateFileTag(
     _In_ PLOG_RECORD logRecord
@@ -1179,7 +1182,6 @@ Return Value:
         }
         _pclose(fp);
     }
-
     printf("Operation: ");
     if (RecordData->Flags & FLT_CALLBACK_DATA_IRP_OPERATION) {
 
@@ -1197,15 +1199,6 @@ Return Value:
         printf( "ERR");
     }
 
-    // --- BLOK KODE BARU ---
-
-    // Panggil fungsi pembantu kita untuk mengisi szProcessName
-    // --- AKHIR BLOK BARU ---
-
-    //
-    // Modifikasi printf Anda untuk menyertakan nama proses
-    // %-15.15s -> Rata kiri, lebar 15, potong jika lebih dari 15
-    //
     printf("\nDeviceObject: %08p ", (PVOID)RecordData->DeviceObject);
     printf("\nFileObject: %08p ", (PVOID)RecordData->FileObject);
     printf("\nTransaction: %08p ", (PVOID)RecordData->Transaction);

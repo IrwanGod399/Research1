@@ -700,7 +700,6 @@ Return Value:
                     PUNICODE_STRING pPathName = NULL;
                     ULONG Pid = msg->PID;
                     INT IsSigned = msg->IsSigned;
-
                     if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)Pid, &eProcess))) {
                         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
                             PPROCESS_STATS test = GetList(pPathName);
@@ -1068,7 +1067,7 @@ BOOLEAN Profiling(
 
 }
 
-BOOLEAN Owr(
+ULONG Owr(
     PUNICODE_STRING Path,
     OP_TYPE OpType,
     _Inout_ PFLT_CALLBACK_DATA Data,
@@ -1079,7 +1078,6 @@ BOOLEAN Owr(
     UNREFERENCED_PARAMETER(FltObjects);
     PLIST_ENTRY entry;
     PPROCESS_STATS pStats = NULL;
-    BOOLEAN isRansomware = FALSE;
     LARGE_INTEGER currentTime;
 
     KeQuerySystemTime(&currentTime);
@@ -1101,8 +1099,6 @@ BOOLEAN Owr(
             }
             FltReleaseFileNameInformation(nameInfo); // Jangan lupa dilepas!
         }
-
-
     }
 
     KeAcquireGuardedMutex(&g_StatsLock);
@@ -1128,13 +1124,15 @@ BOOLEAN Owr(
             }
             pStats->LastResetTime = currentTime;
             pStats->IsSigned = -1;
-            //SendToUserSpace(Data, FltObjects);
+            pStats->FileOpenCount = 0;
+            pStats->FileRenameCount = 0;
+            SendToUserSpace(Data, FltObjects);
             InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
         }
     }
     else {
         LONGLONG diff = currentTime.QuadPart - pStats->LastResetTime.QuadPart;
-        if (diff > RESET_INTERVAL_TICKS && pStats->IsSigned != -1) {
+        if (diff > RESET_INTERVAL_TICKS) {
 
             pStats->LastResetTime = currentTime;
             if (OpType == OP_TYPE_OPEN) {
@@ -1155,12 +1153,8 @@ BOOLEAN Owr(
                 pStats->FileRenameCount++;
             }
         }
-        ULONG Fopen = (pStats->FileOpenCount * 100) / 50;
-        if (Fopen > 100) Fopen = 100;
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Fopen: %u\n", Fopen);
-        ULONG Frename = (pStats->FileRenameCount * 100) / 5;
-        if (Frename > 100) Frename = 100;
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Frename: %u\n", Frename);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: %d\n", pStats->IsSigned);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 1 Path: %wZ\n", &pStats->ImagePath);
         if (pStats->IsSigned == 1) {
             DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 1 Path: %wZ\n", &pStats->ImagePath);
         }else if(pStats->IsSigned == 0){
@@ -1168,16 +1162,19 @@ BOOLEAN Owr(
         }
         if (pStats->FileOpenCount > MAX_FILE_OPENS_PER_SECOND ||
             pStats->FileRenameCount > MAX_FILE_RENAMES_PER_SECOND) {
-            isRansomware = TRUE;
             pStats->FileOpenCount = 0;
             pStats->FileRenameCount = 0;
         }
     }
-  
-
 
     KeReleaseGuardedMutex(&g_StatsLock);
-    return isRansomware;
+    if (OpType == OP_TYPE_OPEN) {
+        return pStats->FileOpenCount;
+    }
+    else if (OpType == OP_TYPE_RENAME) {
+        return pStats->FileRenameCount;
+    }
+    return 0;
 }
 
 BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
@@ -1312,7 +1309,6 @@ SpyPreOperationCallback(
 
     ULONG ProcessId;
     ACCESS_MASK DesiredAccess;
-    NTSTATUS nameStatus;
 
     ProcessId = FltGetRequestorProcessId(Data);
     PEPROCESS eProcess = NULL;
@@ -1320,15 +1316,13 @@ SpyPreOperationCallback(
 
     if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)ProcessId, &eProcess))) {
         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
+            if (ProcessId <= 4) {
+                return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
+
             if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
 
-
-                if (ProcessId <= 4) {
-                    return FLT_PREOP_SUCCESS_NO_CALLBACK;
-                }
-
                 if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation) {
-                    //========================================================================================================
                     if (IsProcessWhitelisted(ProcessId)) {
                         return FLT_PREOP_SUCCESS_NO_CALLBACK;
                     }
@@ -1337,50 +1331,14 @@ SpyPreOperationCallback(
                         }
                     }
                     else if (mD == TRUE) {
-                        if (Check(pPathName, OP_TYPE_RENAME, Data, FltObjects)) {
-                            PEPROCESS pProcess = NULL;
-                            PCHAR procName = "Unknown";
-                            nameStatus = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
-                            PPROCESS_STATS test = GetList(pPathName);
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ\n", &test->ImagePath);
-                            if (NT_SUCCESS(nameStatus)) {
-
-                                procName = (PCHAR)PsGetProcessImageFileName(pProcess);
-                                HANDLE hProcess = NULL;
-                                NTSTATUS termStatus;
-
-                                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [BLOCK] MASS RENAME! Process: %s (PID: %d)\n", procName, ProcessId);
-                                termStatus = ObOpenObjectByPointer(pProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
-                                if (NT_SUCCESS(termStatus)) {
-                                    ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
-                                    ZwClose(hProcess);
-                                }
-
-                                ObDereferenceObject(pProcess);
-                            }
-                            else {
-
-                                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                                    "CoreSentinel: [BLOCK] RANSOMWARE DETECTED! PID: %d\n", ProcessId);
-                            }
-
-                            Data->IoStatus.Status = STATUS_ACCESS_DENIED;
-                            Data->IoStatus.Information = 0;
-                            Prunning(Data, FltObjects);
-                            if (pPathName != NULL) ExFreePool(pPathName);
-                            if (eProcess != NULL) ObDereferenceObject(eProcess);
-                            return FLT_PREOP_COMPLETE;
-                        }
+                        ULONG Rename = Owr(pPathName, OP_TYPE_RENAME, Data, FltObjects);
+                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %u %wZ\n", Rename, pPathName);
                     }
                 }
                 return FLT_PREOP_SUCCESS_NO_CALLBACK;
             }
             if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
 
-
-                if (ProcessId <= 4) {
-                    return FLT_PREOP_SUCCESS_NO_CALLBACK;
-                }
                 DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
 
                 BOOLEAN isWriteOperation = (DesiredAccess & (FILE_WRITE_DATA |
@@ -1401,46 +1359,16 @@ SpyPreOperationCallback(
                     }
                 }
                 else if (mD == TRUE) {
-                    if (Check(pPathName, OP_TYPE_OPEN, Data, FltObjects)) {
-                        PEPROCESS pProcess = NULL;
-                        PCHAR procName = "Unknown";
-
-                        nameStatus = PsLookupProcessByProcessId((HANDLE)ProcessId, &pProcess);
-                        PPROCESS_STATS test = GetList(pPathName);
-                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path2: %wZ\n", &test->ImagePath);
-                        if (NT_SUCCESS(nameStatus)) {
-                            procName = (PCHAR)PsGetProcessImageFileName(pProcess);
-                            HANDLE hProcess = NULL;
-                            NTSTATUS termStatus;
-
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [BLOCK] MASS OPEN! Process: %s (PID: %d)\n", procName, ProcessId);
-                            termStatus = ObOpenObjectByPointer(pProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
-                            if (NT_SUCCESS(termStatus)) {
-                                ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
-                                ZwClose(hProcess);
-                            }
-
-                            ObDereferenceObject(pProcess);
-                        }
-                        else {
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                                "CoreSentinel: [BLOCK] RANSOMWARE DETECTED! PID: %d\n", ProcessId);
-                        }
-
-                        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
-                        Data->IoStatus.Information = 0;
-                        Prunning(Data, FltObjects);
-                        if (pPathName != NULL) ExFreePool(pPathName);
-                        if (eProcess != NULL) ObDereferenceObject(eProcess);
-                        return FLT_PREOP_COMPLETE;
-                    }
+                    ULONG Open = Owr(pPathName, OP_TYPE_OPEN, Data, FltObjects);
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u %wZ\n", Open, pPathName);
                 }
 
             }
             if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
-                ULONG entropy = CalculateEntropyInteger(Data, FltObjects);
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Final Entropy: %u\n", entropy);
-                
+                if (mD == TRUE) {
+                    ULONG entropy = CalculateEntropyInteger(Data, FltObjects);
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Entropy: %u %wZ\n", entropy, pPathName);
+                }
             }
             ExFreePool(pPathName);
         }
