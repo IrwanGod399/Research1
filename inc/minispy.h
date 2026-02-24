@@ -198,6 +198,7 @@ typedef struct _MINISPY_COMMAND_MSG {
     ULONG PID;
     INT IsSigned;
     INT Mode;
+    INT Time;
 } MINISPY_COMMAND_MSG, * PMINISPY_COMMAND_MSG;
 //
 //  Defines the command structure between the utility and the filter.
