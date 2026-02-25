@@ -127,6 +127,8 @@ typedef struct _PROCESS_STATS {
     ULONG ProcessId;            // Siapa prosesnya
     ULONG FileOpenCount;    // Counter untuk Create/Open
     ULONG FileRenameCount;  // Counter untuk Rename (BARU)
+    ULONG Entropy;
+    ULONG Score;
     LARGE_INTEGER LastResetTime; // Kapan terakhir counter di-reset
     BOOLEAN IsWhitelisted;
     INT IsSigned;

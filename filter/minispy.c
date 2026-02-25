@@ -211,6 +211,8 @@ VOID WhitelistExistingProcesses() {
 
     ExFreePool(buffer);
 }
+ULONG Popen = 0;
+ULONG Prename = 0;
 VOID EndProfiling() {
     PLIST_ENTRY entry;
     ULONG Topen = 0;
@@ -227,9 +229,10 @@ VOID EndProfiling() {
         candidate->FileOpenCount = 0;
         candidate->FileRenameCount = 0;
         Tproc++;
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "P ke: %d\n", Tproc);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Process %wZ\n", &candidate->ImagePath);
     }
-
+    Popen = Topen;
+    Prename = Trename;
     mP = FALSE;
     mD = FALSE;
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Tproc: %d\n", Tproc);
@@ -250,7 +253,7 @@ VOID TimerRoutine(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
     EndProfiling();
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Windows Kernel: Pesan muncul setiap 5 detik\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Selesai Profiling\n");
     KeCancelTimer(&Timer);
 }
 
@@ -524,7 +527,10 @@ Return Value:
     FltCloseCommunicationPort( MiniSpyData.ServerPort );
 
     FltUnregisterFilter( MiniSpyData.Filter );
-
+    if (mP == TRUE) {
+        KeCancelTimer(&Timer);
+    }
+    
     SpyEmptyOutputBufferList();
     ExDeleteNPagedLookasideList( &MiniSpyData.FreeBufferList );
     return STATUS_SUCCESS;
@@ -558,11 +564,91 @@ Return Value:
     PAGED_CODE();
     return STATUS_SUCCESS;
 }
-PPROCESS_STATS GetList(PUNICODE_STRING Path) {
+
+
+
+BOOLEAN SendToUserSpace(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects
+) {
+    PRECORD_LIST recordList;
+    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
+    NTSTATUS status;
+    PUNICODE_STRING nameToUse;
+    UNICODE_STRING unknownName = RTL_CONSTANT_STRING(L"UNKNOWN");
+
+#if MINISPY_VISTA
+    PUNICODE_STRING ecpDataToUse = NULL;
+    UNICODE_STRING ecpData;
+    WCHAR ecpDataBuffer[MAX_NAME_SPACE / sizeof(WCHAR)];
+#endif
+
+    recordList = SpyNewRecord();
+    if (!recordList) {
+        return FALSE;
+    }
+
+    status = FltGetFileNameInformation(Data,
+        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        &nameInfo);
+    PEPROCESS pProcess = NULL;
+    HANDLE ProcessId = (HANDLE)FltGetRequestorProcessId(Data);
+
+    NTSTATUS nameStatus = PsLookupProcessByProcessId(ProcessId, &pProcess);
+    if (NT_SUCCESS(nameStatus)) {
+        PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
+        RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "SendToUser Process: %s\n", imageName);
+        ObDereferenceObject(pProcess);
+    }
+    PUNICODE_STRING pImageName = NULL;
+    NTSTATUS path = SeLocateProcessImageName(pProcess, &pImageName);
+    if (NT_SUCCESS(path) && pImageName != NULL) {
+        nameToUse = pImageName;
+        ExFreePool(pImageName);
+    }
+    else {
+        nameToUse = &unknownName;
+    }
+
+
+#if MINISPY_VISTA
+
+    if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
+        RtlInitEmptyUnicodeString(&ecpData,
+            ecpDataBuffer,
+            MAX_NAME_SPACE / sizeof(WCHAR));
+
+        SpyParseEcps(Data, recordList, &ecpData);
+        ecpDataToUse = &ecpData;
+    }
+
+
+    SpySetRecordNameAndEcpData(&(recordList->LogRecord), nameToUse, ecpDataToUse);
+#else
+
+    SpySetRecordName(&(recordList->LogRecord), nameToUse);
+#endif
+
+    if (nameInfo != NULL) {
+        FltReleaseFileNameInformation(nameInfo);
+    }
+
+    SpyLogPreOperationData(Data, FltObjects, recordList);
+    SpyLog(recordList);
+
+    return TRUE;
+}
+PPROCESS_STATS GetList(
+    PUNICODE_STRING Path,
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects
+)
+{
     PLIST_ENTRY entry;
     PPROCESS_STATS pStats = NULL;
-
-
+    LARGE_INTEGER currentTime;
+    KeQuerySystemTime(&currentTime);
     KeAcquireGuardedMutex(&g_StatsLock);
 
 
@@ -573,11 +659,68 @@ PPROCESS_STATS GetList(PUNICODE_STRING Path) {
             break;
         }
     }
-
+    if (pStats == NULL) {
+        pStats = (PPROCESS_STATS)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PROCESS_STATS), 'stat');
+        if (pStats) {
+            RtlZeroMemory(pStats, sizeof(PROCESS_STATS));
+            pStats->ImagePath.MaximumLength = Path->MaximumLength;
+            pStats->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, Path->MaximumLength, 'pstr');
+            if (pStats->ImagePath.Buffer) {
+                RtlCopyUnicodeString(&pStats->ImagePath, Path);
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", &pStats->ImagePath);
+            }
+            pStats->LastResetTime = currentTime;
+            pStats->IsSigned = -1;
+            pStats->FileOpenCount = 0;
+            pStats->FileRenameCount = 0;
+            if (mD == TRUE) {
+                SendToUserSpace(Data, FltObjects);
+            }
+            InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
+        }
+    }
     KeReleaseGuardedMutex(&g_StatsLock);
     return pStats;
 }
+PPROCESS_STATS TList(
+    PUNICODE_STRING Path
+)
+{
+    PLIST_ENTRY entry;
+    PPROCESS_STATS pStats = NULL;
+    KeAcquireGuardedMutex(&g_StatsLock);
+    for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
+        PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
+        if (RtlEqualUnicodeString(Path, &candidate->ImagePath, TRUE)) {
+            pStats = candidate;
+            break;
+        }
+    }
+    KeReleaseGuardedMutex(&g_StatsLock);
+    return pStats;
+}
+VOID ClearAllProcessStats() {
+    PLIST_ENTRY entry;
+    PPROCESS_STATS pStats;
 
+    KeAcquireGuardedMutex(&g_StatsLock);
+
+    while (!IsListEmpty(&g_ProcessStatsList)) {
+
+        entry = RemoveHeadList(&g_ProcessStatsList);
+
+        pStats = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
+
+        if (pStats->ImagePath.Buffer != NULL) {
+            ExFreePoolWithTag(pStats->ImagePath.Buffer, 'pstr');
+        }
+
+        ExFreePoolWithTag(pStats, 'stat');
+    }
+
+    KeReleaseGuardedMutex(&g_StatsLock);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Clear\n");
+}
 LARGE_INTEGER sTime;
 NTSTATUS
 SpyMessage (
@@ -672,6 +815,7 @@ Return Value:
                         }
                         else {
                             mP = TRUE;
+                            ClearAllProcessStats();
                             DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Time: % d\n", time);
                             SetTimer(time);
                         }
@@ -702,7 +846,7 @@ Return Value:
                     INT IsSigned = msg->IsSigned;
                     if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)Pid, &eProcess))) {
                         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
-                            PPROCESS_STATS test = GetList(pPathName);
+                            PPROCESS_STATS test = TList(pPathName);
                             test->IsSigned = IsSigned;
                             DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ ,Signed: %d\n", &test->ImagePath, test->IsSigned);
                         }
@@ -917,89 +1061,14 @@ BOOLEAN Prunning(
 }
 
 
-BOOLEAN SendToUserSpace(
-    _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_ PCFLT_RELATED_OBJECTS FltObjects
-) {
-    PRECORD_LIST recordList;
-    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
-    NTSTATUS status;
-    PUNICODE_STRING nameToUse;
-    UNICODE_STRING unknownName = RTL_CONSTANT_STRING(L"UNKNOWN");
 
-#if MINISPY_VISTA
-    PUNICODE_STRING ecpDataToUse = NULL;
-    UNICODE_STRING ecpData;
-    WCHAR ecpDataBuffer[MAX_NAME_SPACE / sizeof(WCHAR)];
-#endif
-
-    recordList = SpyNewRecord();
-    if (!recordList) {
-        return FALSE;
-    }
-
-    status = FltGetFileNameInformation(Data,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
-        &nameInfo);
-    PEPROCESS pProcess = NULL;
-    HANDLE ProcessId = (HANDLE)FltGetRequestorProcessId(Data);
-
-    NTSTATUS nameStatus = PsLookupProcessByProcessId(ProcessId, &pProcess);
-    if (NT_SUCCESS(nameStatus)) {
-        PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
-        RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "SendToUser Process: %s\n", imageName);
-        ObDereferenceObject(pProcess);
-    }
-    PUNICODE_STRING pImageName = NULL;
-    NTSTATUS path = SeLocateProcessImageName(pProcess, &pImageName);
-    if (NT_SUCCESS(path) && pImageName != NULL) {
-        nameToUse = pImageName;
-        ExFreePool(pImageName);
-    }
-    else {
-        nameToUse = &unknownName;
-    }
-
-
-#if MINISPY_VISTA
-
-    if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
-        RtlInitEmptyUnicodeString(&ecpData,
-            ecpDataBuffer,
-            MAX_NAME_SPACE / sizeof(WCHAR));
-
-        SpyParseEcps(Data, recordList, &ecpData);
-        ecpDataToUse = &ecpData;
-    }
-
-
-    SpySetRecordNameAndEcpData(&(recordList->LogRecord), nameToUse, ecpDataToUse);
-#else
-
-    SpySetRecordName(&(recordList->LogRecord), nameToUse);
-#endif
-
-    if (nameInfo != NULL) {
-        FltReleaseFileNameInformation(nameInfo);
-    }
-
-    SpyLogPreOperationData(Data, FltObjects, recordList);
-    SpyLog(recordList);
-
-    return TRUE;
-}
 
 BOOLEAN Profiling(
-    PUNICODE_STRING Path,
+    PPROCESS_STATS pStats,
     OP_TYPE OpType,
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ PCFLT_RELATED_OBJECTS FltObjects)
 {
-    PLIST_ENTRY entry;
-    PPROCESS_STATS pStats = NULL;
-    LARGE_INTEGER currentTime;
-
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     if (FltObjects->FileObject != NULL) {
@@ -1024,51 +1093,19 @@ BOOLEAN Profiling(
         status = STATUS_UNSUCCESSFUL;
     }
     
-    KeQuerySystemTime(&currentTime);
-
-
-    KeAcquireGuardedMutex(&g_StatsLock);
-
-    for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
-        PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
-        if (RtlEqualUnicodeString(Path, &candidate->ImagePath, TRUE)) {
-            pStats = candidate;
-            break;
-        }
+    if (OpType == OP_TYPE_OPEN) {
+        pStats->FileOpenCount++;
+    }
+    else if (OpType == OP_TYPE_RENAME) {
+        pStats->FileRenameCount++;
     }
 
-    if (pStats == NULL) {
-        pStats = (PPROCESS_STATS)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PROCESS_STATS), 'stat');
-        if (pStats) {
-            RtlZeroMemory(pStats, sizeof(PROCESS_STATS));
-            pStats->ImagePath.MaximumLength = Path->MaximumLength;
-            pStats->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, Path->MaximumLength, 'pstr');
-            if (pStats->ImagePath.Buffer) {
-                RtlCopyUnicodeString(&pStats->ImagePath, Path);
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", &pStats->ImagePath);
-            }
-            pStats->LastResetTime = currentTime;
-            InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
-        }
-    }
-    else {
-
-        if (OpType == OP_TYPE_OPEN) {
-            pStats->FileOpenCount++;
-        }
-        else if (OpType == OP_TYPE_RENAME) {
-            pStats->FileRenameCount++;
-        }
-
-    }
-
-    KeReleaseGuardedMutex(&g_StatsLock);
     return TRUE;
 
 }
 
 ULONG Owr(
-    PUNICODE_STRING Path,
+    PPROCESS_STATS pStats,
     OP_TYPE OpType,
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ PCFLT_RELATED_OBJECTS FltObjects
@@ -1076,8 +1113,6 @@ ULONG Owr(
 {
     UNREFERENCED_PARAMETER(Data);
     UNREFERENCED_PARAMETER(FltObjects);
-    PLIST_ENTRY entry;
-    PPROCESS_STATS pStats = NULL;
     LARGE_INTEGER currentTime;
 
     KeQuerySystemTime(&currentTime);
@@ -1101,73 +1136,34 @@ ULONG Owr(
         }
     }
 
-    KeAcquireGuardedMutex(&g_StatsLock);
+    LONGLONG diff = currentTime.QuadPart - pStats->LastResetTime.QuadPart;
+    if (diff > RESET_INTERVAL_TICKS) {
 
-
-    for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
-        PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
-        if (RtlEqualUnicodeString(Path, &candidate->ImagePath, TRUE)) {
-            pStats = candidate;
-            break;
-        }
-    }
-
-    if (pStats == NULL) {
-        pStats = (PPROCESS_STATS)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(PROCESS_STATS), 'stat');
-        if (pStats) {
-            RtlZeroMemory(pStats, sizeof(PROCESS_STATS));
-            pStats->ImagePath.MaximumLength = Path->MaximumLength;
-            pStats->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, Path->MaximumLength, 'pstr');
-            if (pStats->ImagePath.Buffer) {
-                RtlCopyUnicodeString(&pStats->ImagePath, Path);
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", &pStats->ImagePath);
-            }
-            pStats->LastResetTime = currentTime;
-            pStats->IsSigned = -1;
-            pStats->FileOpenCount = 0;
+        pStats->LastResetTime = currentTime;
+        if (OpType == OP_TYPE_OPEN) {
+            pStats->FileOpenCount = 1;
             pStats->FileRenameCount = 0;
-            SendToUserSpace(Data, FltObjects);
-            InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
+        }
+        else {
+            pStats->FileOpenCount = 0;
+            pStats->FileRenameCount = 1;
         }
     }
     else {
-        LONGLONG diff = currentTime.QuadPart - pStats->LastResetTime.QuadPart;
-        if (diff > RESET_INTERVAL_TICKS) {
 
-            pStats->LastResetTime = currentTime;
-            if (OpType == OP_TYPE_OPEN) {
-                pStats->FileOpenCount = 1;
-                pStats->FileRenameCount = 0;
-            }
-            else {
-                pStats->FileOpenCount = 0;
-                pStats->FileRenameCount = 1;
-            }
+        if (OpType == OP_TYPE_OPEN) {
+            pStats->FileOpenCount++;
         }
-        else {
-
-            if (OpType == OP_TYPE_OPEN) {
-                pStats->FileOpenCount++;
-            }
-            else if (OpType == OP_TYPE_RENAME) {
-                pStats->FileRenameCount++;
-            }
-        }
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: %d\n", pStats->IsSigned);
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 1 Path: %wZ\n", &pStats->ImagePath);
-        if (pStats->IsSigned == 1) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 1 Path: %wZ\n", &pStats->ImagePath);
-        }else if(pStats->IsSigned == 0){
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: 0 Path: %wZ\n", &pStats->ImagePath);
-        }
-        if (pStats->FileOpenCount > MAX_FILE_OPENS_PER_SECOND ||
-            pStats->FileRenameCount > MAX_FILE_RENAMES_PER_SECOND) {
-            pStats->FileOpenCount = 0;
-            pStats->FileRenameCount = 0;
+        else if (OpType == OP_TYPE_RENAME) {
+            pStats->FileRenameCount++;
         }
     }
-
-    KeReleaseGuardedMutex(&g_StatsLock);
+    if (pStats->FileOpenCount > MAX_FILE_OPENS_PER_SECOND ||
+        pStats->FileRenameCount > MAX_FILE_RENAMES_PER_SECOND) {
+        pStats->FileOpenCount = 0;
+        pStats->FileRenameCount = 0;
+    }
+ 
     if (OpType == OP_TYPE_OPEN) {
         return pStats->FileOpenCount;
     }
@@ -1273,31 +1269,31 @@ ULONG CalculateEntropyInteger(
     return entropy;
 }
 
-BOOLEAN Check(
-    PUNICODE_STRING Path,
-    OP_TYPE OpType,
-    _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_ PCFLT_RELATED_OBJECTS FltObjects
-)
-{
-    if (Owr(Path, OpType, Data, FltObjects)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "TRUEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE\n");
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Owr: %wZ\n", Path);
+BOOLEAN Score(
+    PPROCESS_STATS pStat
+) {
+    //ULONG skor = 0;
+    ULONG open = 0;
+    ULONG rename = 0;
+    if (pStat->IsSigned == -1) {
+        return 0;
     }
-
-    //if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
-    //    if (CalculateEntropyInteger(Data, FltObjects)) {
-    //        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "TRUEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE\n");
-    //        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Enropy: %wZ\n", Path);
-    //    }
-    //}
-    if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
-        if (CalculateEntropyInteger(Data, FltObjects)) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "WRITE\n");
+    else {
+        open = pStat->FileOpenCount;
+        rename = pStat->FileRenameCount;
+        
+        if (open > 0 || rename > 0 || pStat->Entropy > 0) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "RealPath: %wZ\n", &pStat->ImagePath);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u\n", pStat->FileOpenCount);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %u\n", pStat->FileRenameCount);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Entropy: %u\n", pStat->Entropy);
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: %d\n", pStat->IsSigned);
         }
     }
-    return FALSE;
+
+    return TRUE;
 }
+
 FLT_PREOP_CALLBACK_STATUS
 SpyPreOperationCallback(
     _Inout_ PFLT_CALLBACK_DATA Data,
@@ -1313,64 +1309,87 @@ SpyPreOperationCallback(
     ProcessId = FltGetRequestorProcessId(Data);
     PEPROCESS eProcess = NULL;
     PUNICODE_STRING pPathName = NULL;
-
+    INT Flag = 0;
     if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)ProcessId, &eProcess))) {
         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
             if (ProcessId <= 4) {
                 return FLT_PREOP_SUCCESS_NO_CALLBACK;
             }
+            if (mP == TRUE || mD == TRUE) {
+                PPROCESS_STATS pStat = GetList(pPathName, Data, FltObjects);
+                if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
+                    Flag = 1;
+                    if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation) {
+                        if (IsProcessWhitelisted(ProcessId)) {
+                            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+                        }
+                        if (mP == TRUE) {
 
-            if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
+                            if (Profiling(pStat, OP_TYPE_RENAME, Data, FltObjects)) {
+                            }
+                        }
+                        else if (mD == TRUE) {
+                            ULONG Rename;
+                            Rename = Owr(pStat, OP_TYPE_RENAME, Data, FltObjects);
+                            //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %u %wZ\n", Rename, pPathName);
+                        }
+                    }
+                    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+                }
+                if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
+                    Flag = 1;
+                    DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
 
-                if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation) {
+                    BOOLEAN isWriteOperation = (DesiredAccess & (FILE_WRITE_DATA |
+                        FILE_APPEND_DATA |
+                        DELETE |
+                        GENERIC_WRITE |
+                        GENERIC_ALL)) != 0;
+
+                    if (!isWriteOperation) {
+                        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+                    }
                     if (IsProcessWhitelisted(ProcessId)) {
+
                         return FLT_PREOP_SUCCESS_NO_CALLBACK;
                     }
                     if (mP == TRUE) {
-                        if (Profiling(pPathName, OP_TYPE_RENAME, Data, FltObjects)) {
+                        if (Profiling(pStat, OP_TYPE_OPEN, Data, FltObjects)) {
                         }
                     }
                     else if (mD == TRUE) {
-                        ULONG Rename = Owr(pPathName, OP_TYPE_RENAME, Data, FltObjects);
-                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %u %wZ\n", Rename, pPathName);
+                        ULONG Open;
+                        Open = Owr(pStat, OP_TYPE_OPEN, Data, FltObjects);
+
+                        //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u %wZ\n", Open, pPathName);
                     }
-                }
-                return FLT_PREOP_SUCCESS_NO_CALLBACK;
-            }
-            if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
 
-                DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
-
-                BOOLEAN isWriteOperation = (DesiredAccess & (FILE_WRITE_DATA |
-                    FILE_APPEND_DATA |
-                    DELETE |
-                    GENERIC_WRITE |
-                    GENERIC_ALL)) != 0;
-
-                if (!isWriteOperation) {
-                    return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
-                if (IsProcessWhitelisted(ProcessId)) {
-
-                    return FLT_PREOP_SUCCESS_NO_CALLBACK;
-                }
-                if (mP == TRUE) {
-                    if (Profiling(pPathName, OP_TYPE_OPEN, Data, FltObjects)) {
-                    }
-                }
-                else if (mD == TRUE) {
-                    ULONG Open = Owr(pPathName, OP_TYPE_OPEN, Data, FltObjects);
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u %wZ\n", Open, pPathName);
-                }
-
-            }
-            if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
                 if (mD == TRUE) {
-                    ULONG entropy = CalculateEntropyInteger(Data, FltObjects);
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Entropy: %u %wZ\n", entropy, pPathName);
+
+                    if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
+                        Flag = 1;
+                        if (mD == TRUE) {
+                            ULONG entropy = 0;
+                            entropy = CalculateEntropyInteger(Data, FltObjects);
+                            pStat->Entropy = entropy;
+                            //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Entropy: %u %wZ\n", entropy, pPathName);
+                        }
+                    }
+                    if (Flag == 1) {
+                        Score(pStat);
+                    }
+                    
                 }
+
+                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", pPathName);
+                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u\n", pStat->FileOpenCount);
+                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u\n", pStat->FileRenameCount);
+                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: %d\n", pStat->IsSigned);
+
+
+                ExFreePool(pPathName);
             }
-            ExFreePool(pPathName);
         }
         ObDereferenceObject(eProcess);
     }
