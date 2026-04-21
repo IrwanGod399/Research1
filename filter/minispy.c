@@ -1,4 +1,4 @@
-﻿/*++
+/*++
 
 Copyright (c) 1989-2002  Microsoft Corporation
 
@@ -125,7 +125,7 @@ BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
 
     if (isDuplicate) {
         KeReleaseGuardedMutex(&g_WhitelistLock);
-         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [SKIP] Duplicate Path: %wZ\n", Path);
+         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Skip Dup Path: %wZ\n", Path);
         return FALSE;
     }
 
@@ -149,7 +149,7 @@ BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
     InsertHeadList(&g_WhitelistHead, &pEntry->ListEntry);
     KeReleaseGuardedMutex(&g_WhitelistLock);
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: [WHITELIST ADD] %wZ\n", &pEntry->ImagePath);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Whitelist Add: %wZ\n", &pEntry->ImagePath);
     return TRUE;
 }
 //=============================================================================
@@ -174,7 +174,7 @@ VOID WhitelistExistingProcesses() {
     buffer = ExAllocatePool2(POOL_FLAG_PAGED, bufferSize, 'snap');
 
     if (!buffer) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "CoreSentinel: Gagal Alokasi Memori!\n");
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Mem Alloc Fail!\n");
         return;
     }
     status = ZwQuerySystemInformation(SystemProcessInformation, buffer, bufferSize, &returnLength);
@@ -206,42 +206,40 @@ VOID WhitelistExistingProcesses() {
 
         KeReleaseGuardedMutex(&g_StatsLock);
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "CoreSentinel: [INIT] Total Whitelisted Processes: %d\n", count);
+            "[CS] Init WL procs: %d\n", count);
     }
 
     ExFreePool(buffer);
 }
-ULONG Popen = 0;
+ULONG Pwrite = 0;
 ULONG Prename = 0;
 VOID EndProfiling() {
     PLIST_ENTRY entry;
-    ULONG Topen = 0;
+    ULONG Twrite = 0;
     ULONG Trename = 0;
     ULONG Tproc = 0;
     for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
         PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
-        if (candidate->FileOpenCount > 0) {
-            Topen += candidate->FileOpenCount;
+        if (candidate->FileWriteCount > 0) {
+            Twrite += candidate->FileWriteCount;
         }
         if (candidate->FileRenameCount > 0) {
             Trename += candidate->FileRenameCount;
         }
-        candidate->FileOpenCount = 0;
+        candidate->FileWriteCount = 0;
         candidate->FileRenameCount = 0;
         Tproc++;
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Process %wZ\n", &candidate->ImagePath);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Proc %wZ\n", &candidate->ImagePath);
     }
-    Popen = Topen;
+    Pwrite = Twrite;
     Prename = Trename;
     mP = FALSE;
     mD = FALSE;
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Tproc: %d\n", Tproc);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Topen: %d\n", Topen);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Trename: %d\n", Trename);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] P/W/R: %d/%d/%d\n", Tproc, Twrite, Trename);
 }
 
 VOID Testing1() {
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "KONTOOTMOT\n");
+    // Removed test print
 }
 
 KTIMER Timer;
@@ -253,7 +251,7 @@ VOID TimerRoutine(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
     EndProfiling();
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Selesai Profiling\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Profiling done\n");
     KeCancelTimer(&Timer);
 }
 
@@ -598,7 +596,7 @@ BOOLEAN SendToUserSpace(
     if (NT_SUCCESS(nameStatus)) {
         PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
         RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "SendToUser Process: %s\n", imageName);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] SendToUser: %s\n", imageName);
         ObDereferenceObject(pProcess);
     }
     PUNICODE_STRING pImageName = NULL;
@@ -667,14 +665,20 @@ PPROCESS_STATS GetList(
             pStats->ImagePath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_NON_PAGED, Path->MaximumLength, 'pstr');
             if (pStats->ImagePath.Buffer) {
                 RtlCopyUnicodeString(&pStats->ImagePath, Path);
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", &pStats->ImagePath);
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Path: %wZ\n", &pStats->ImagePath);
             }
             pStats->LastResetTime = currentTime;
             pStats->IsSigned = -1;
-            pStats->FileOpenCount = 0;
+            pStats->FileWriteCount = 0;
             pStats->FileRenameCount = 0;
             if (mD == TRUE) {
-                SendToUserSpace(Data, FltObjects);
+                UNICODE_STRING usersDir = RTL_CONSTANT_STRING(L"\\Users\\");
+                if (FsRtlIsNameInExpression(&usersDir, &pStats->ImagePath, TRUE, NULL) ||
+                    wcsstr(pStats->ImagePath.Buffer, L"\\Users\\") != NULL) {
+                    SendToUserSpace(Data, FltObjects);
+                } else {
+                    pStats->IsSigned = 1;
+                }
             }
             InsertHeadList(&g_ProcessStatsList, &pStats->ListEntry);
         }
@@ -719,7 +723,7 @@ VOID ClearAllProcessStats() {
     }
 
     KeReleaseGuardedMutex(&g_StatsLock);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Clear\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Stats Cleared\n");
 }
 LARGE_INTEGER sTime;
 NTSTATUS
@@ -816,7 +820,7 @@ Return Value:
                         else {
                             mP = TRUE;
                             ClearAllProcessStats();
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Time: % d\n", time);
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Timer: %d\n", time);
                             SetTimer(time);
                         }
                         mD = FALSE;
@@ -830,7 +834,7 @@ Return Value:
                         }
                         mP = FALSE;
                     }
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Status: mP:%u mD:%u\n", mP, mD);
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] mP:%u mD:%u\n", mP, mD);
                 }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
                     status = GetExceptionCode();
                 }
@@ -848,11 +852,11 @@ Return Value:
                         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
                             PPROCESS_STATS test = TList(pPathName);
                             test->IsSigned = IsSigned;
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path1: %wZ ,Signed: %d\n", &test->ImagePath, test->IsSigned);
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig: %wZ, %d\n", &test->ImagePath, test->IsSigned);
                         }
                     }
                     
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "UHUHUHUHU\n");
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig processed\n");
                 }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
                     status = GetExceptionCode();
                 }
@@ -1016,7 +1020,7 @@ BOOLEAN Prunning(
     if (NT_SUCCESS(nameStatus)) {
         PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
         RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "SendToUser Process: %s\n", imageName);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] SendToUser: %s\n", imageName);
         ObDereferenceObject(pProcess);
     }
     PUNICODE_STRING pImageName = NULL;
@@ -1078,11 +1082,11 @@ BOOLEAN Profiling(
             MiniSpyData.NameQueryMethod,
             &nameInfo);
         if (NT_SUCCESS(status)) {
-            if (OpType == OP_TYPE_OPEN) {
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %wZ\n", &nameInfo->Name);
+            if (OpType == OP_TYPE_WRITE) {
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Write: %wZ\n", &nameInfo->Name);
             }
             else if (OpType == OP_TYPE_RENAME) {
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %wZ\n", &nameInfo->Name);
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Rename: %wZ\n", &nameInfo->Name);
             }
             FltReleaseFileNameInformation(nameInfo);
         }
@@ -1093,8 +1097,8 @@ BOOLEAN Profiling(
         status = STATUS_UNSUCCESSFUL;
     }
     
-    if (OpType == OP_TYPE_OPEN) {
-        pStats->FileOpenCount++;
+    if (OpType == OP_TYPE_WRITE) {
+        pStats->FileWriteCount++;
     }
     else if (OpType == OP_TYPE_RENAME) {
         pStats->FileRenameCount++;
@@ -1126,8 +1130,8 @@ ULONG Owr(
             MiniSpyData.NameQueryMethod,
             &nameInfo);
         if (NT_SUCCESS(status)) {
-            if (OpType == OP_TYPE_OPEN) {
-                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %wZ\n", &nameInfo->Name);
+            if (OpType == OP_TYPE_WRITE) {
+                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Write: %wZ\n", &nameInfo->Name);
             }
             else if (OpType == OP_TYPE_RENAME) {
                 //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %wZ\n", &nameInfo->Name);
@@ -1140,32 +1144,32 @@ ULONG Owr(
     if (diff > RESET_INTERVAL_TICKS) {
 
         pStats->LastResetTime = currentTime;
-        if (OpType == OP_TYPE_OPEN) {
-            pStats->FileOpenCount = 1;
+        if (OpType == OP_TYPE_WRITE) {
+            pStats->FileWriteCount = 1;
             pStats->FileRenameCount = 0;
         }
         else {
-            pStats->FileOpenCount = 0;
+            pStats->FileWriteCount = 0;
             pStats->FileRenameCount = 1;
         }
     }
     else {
 
-        if (OpType == OP_TYPE_OPEN) {
-            pStats->FileOpenCount++;
+        if (OpType == OP_TYPE_WRITE) {
+            pStats->FileWriteCount++;
         }
         else if (OpType == OP_TYPE_RENAME) {
             pStats->FileRenameCount++;
         }
     }
-    if (pStats->FileOpenCount > MAX_FILE_OPENS_PER_SECOND ||
+    if (pStats->FileWriteCount > MAX_FILE_WRITES_PER_SECOND ||
         pStats->FileRenameCount > MAX_FILE_RENAMES_PER_SECOND) {
-        pStats->FileOpenCount = 0;
+        pStats->FileWriteCount = 0;
         pStats->FileRenameCount = 0;
     }
  
-    if (OpType == OP_TYPE_OPEN) {
-        return pStats->FileOpenCount;
+    if (OpType == OP_TYPE_WRITE) {
+        return pStats->FileWriteCount;
     }
     else if (OpType == OP_TYPE_RENAME) {
         return pStats->FileRenameCount;
@@ -1254,7 +1258,7 @@ ULONG CalculateEntropyInteger(
                     MiniSpyData.NameQueryMethod,
                     &nameInfo);
                 if (NT_SUCCESS(status)) {
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", &nameInfo->Name);
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] EntPath: %wZ\n", &nameInfo->Name);
                     FltReleaseFileNameInformation(nameInfo);
                 }
 
@@ -1262,7 +1266,7 @@ ULONG CalculateEntropyInteger(
             else {
                 status = STATUS_UNSUCCESSFUL;
             }
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "WARNING: High Entropy Detected (%u/800) for PID %u\n",entropy, (ULONG)FltGetRequestorProcessId(Data));
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] WARN High Entropy (%u/800) PID %u\n",entropy, (ULONG)FltGetRequestorProcessId(Data));
         }
     }
 
@@ -1272,22 +1276,41 @@ ULONG CalculateEntropyInteger(
 BOOLEAN Score(
     PPROCESS_STATS pStat
 ) {
-    //ULONG skor = 0;
-    ULONG open = 0;
+    // Threshold and Weights
+    ULONG THRESHOLD_SCORE = 1000;
+    ULONG WEIGHT_WRITE = 10;
+    ULONG WEIGHT_RENAME = 50;
+    ULONG WEIGHT_ENTROPY = 1;     // Entropy value is up to ~800, so 800 * 1 = 800 points
+    ULONG WEIGHT_UNSIGNED = 200;  // Penalty if process is not signed
+
+    ULONG totalScore = 0;
+    ULONG write = 0;
     ULONG rename = 0;
-    if (pStat->IsSigned == -1) {
-        return 0;
+    ULONG entropy = 0;
+
+    write = pStat->FileWriteCount;
+    rename = pStat->FileRenameCount;
+    entropy = pStat->Entropy;
+
+    // Calculate score with weights
+    totalScore += (write * WEIGHT_WRITE);
+    totalScore += (rename * WEIGHT_RENAME);
+    totalScore += (entropy * WEIGHT_ENTROPY);
+    
+    // Only apply unsigned penalty if we explicitly know it's not signed
+    if (pStat->IsSigned == 0) {
+        totalScore += WEIGHT_UNSIGNED;
     }
-    else {
-        open = pStat->FileOpenCount;
-        rename = pStat->FileRenameCount;
-        
-        if (open > 0 || rename > 0 || pStat->Entropy > 0) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "RealPath: %wZ\n", &pStat->ImagePath);
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u\n", pStat->FileOpenCount);
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %u\n", pStat->FileRenameCount);
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Entropy: %u\n", pStat->Entropy);
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: %d\n", pStat->IsSigned);
+
+    // Check if total score exceeds threshold
+    if (totalScore >= THRESHOLD_SCORE) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] RANSOMWARE DETECTED! Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n", 
+            totalScore, THRESHOLD_SCORE, &pStat->ImagePath, write, rename, entropy, pStat->IsSigned);
+    } else {
+        // Only log if there's actual activity
+        if (write > 0 || rename > 0 || entropy > 0) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n", 
+                totalScore, THRESHOLD_SCORE, &pStat->ImagePath, write, rename, entropy, pStat->IsSigned);
         }
     }
 
@@ -1304,7 +1327,6 @@ SpyPreOperationCallback(
     UNREFERENCED_PARAMETER(CompletionContext);
 
     ULONG ProcessId;
-    ACCESS_MASK DesiredAccess;
 
     ProcessId = FltGetRequestorProcessId(Data);
     PEPROCESS eProcess = NULL;
@@ -1336,54 +1358,28 @@ SpyPreOperationCallback(
                     }
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
-                if (Data->Iopb->MajorFunction == IRP_MJ_CREATE) {
+                if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
                     Flag = 1;
-                    DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
-
-                    BOOLEAN isWriteOperation = (DesiredAccess & (FILE_WRITE_DATA |
-                        FILE_APPEND_DATA |
-                        DELETE |
-                        GENERIC_WRITE |
-                        GENERIC_ALL)) != 0;
-
-                    if (!isWriteOperation) {
-                        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-                    }
                     if (IsProcessWhitelisted(ProcessId)) {
-
                         return FLT_PREOP_SUCCESS_NO_CALLBACK;
                     }
                     if (mP == TRUE) {
-                        if (Profiling(pStat, OP_TYPE_OPEN, Data, FltObjects)) {
-                        }
+                        Profiling(pStat, OP_TYPE_WRITE, Data, FltObjects);
                     }
                     else if (mD == TRUE) {
-                        ULONG Open;
-                        Open = Owr(pStat, OP_TYPE_OPEN, Data, FltObjects);
-
-                        //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u %wZ\n", Open, pPathName);
-                    }
-
-                }
-                if (mD == TRUE) {
-
-                    if (Data->Iopb->MajorFunction == IRP_MJ_WRITE) {
-                        Flag = 1;
-                        if (mD == TRUE) {
-                            ULONG entropy = 0;
-                            entropy = CalculateEntropyInteger(Data, FltObjects);
-                            pStat->Entropy = entropy;
-                            //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Entropy: %u %wZ\n", entropy, pPathName);
+                        ULONG entropy = 0;
+                        entropy = CalculateEntropyInteger(Data, FltObjects);
+                        pStat->Entropy = entropy;
+                        if(entropy > 0){
+Owr(pStat, OP_TYPE_WRITE, Data, FltObjects);
                         }
-                    }
-                    if (Flag == 1) {
+                        
                         Score(pStat);
                     }
-                    
                 }
 
                 //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", pPathName);
-                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u\n", pStat->FileOpenCount);
+                //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Write: %u\n", pStat->FileWriteCount);
                 //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Open: %u\n", pStat->FileRenameCount);
                 //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Signature: %d\n", pStat->IsSigned);
 
@@ -1416,7 +1412,7 @@ Arguments
 Return value
 
     Returns STATUS_SUCCESS if we were able to successfully enlist in a new transcation or if we
-    were already enlisted in the transaction. Returns an appropriate error code on a failure.
+    were alreazdy enlisted in the transaction. Returns an appropriate error code on a failure.
     
 --*/
 {

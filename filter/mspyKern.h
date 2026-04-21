@@ -115,17 +115,17 @@ typedef enum _ECP_TYPE {
 //      Global variables
 //---------------------------------------------------------------------------
 #define RESET_INTERVAL_TICKS       10000000 // 1 detik (dalam satuan 100ns)
-#define MAX_FILE_OPENS_PER_SECOND  50   // Jika > 20 file/detik = Ransomware
+#define MAX_FILE_WRITES_PER_SECOND  50   // Jika > 20 file/detik = Ransomware
 #define MAX_FILE_RENAMES_PER_SECOND 5
 #define MAX_UNIQUE_DIRS 5             // Batas Folder Unik
 #define MAX_DIR_LENGTH 260
 typedef enum _OP_TYPE {
-    OP_TYPE_OPEN,
+    OP_TYPE_WRITE,
     OP_TYPE_RENAME
 } OP_TYPE;
 typedef struct _PROCESS_STATS {
     ULONG ProcessId;            // Siapa prosesnya
-    ULONG FileOpenCount;    // Counter untuk Create/Open
+    ULONG FileWriteCount;    // Counter untuk Write
     ULONG FileRenameCount;  // Counter untuk Rename (BARU)
     ULONG Entropy;
     ULONG Score;
