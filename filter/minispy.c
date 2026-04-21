@@ -1,4 +1,4 @@
-/*++
+﻿/*++
 
 Copyright (c) 1989-2002  Microsoft Corporation
 
@@ -668,7 +668,7 @@ PPROCESS_STATS GetList(
                 DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Path: %wZ\n", &pStats->ImagePath);
             }
             pStats->LastResetTime = currentTime;
-            pStats->IsSigned = -1;
+            pStats->IsSigned = 0;
             pStats->FileWriteCount = 0;
             pStats->FileRenameCount = 0;
             if (mD == TRUE) {
@@ -1277,11 +1277,11 @@ BOOLEAN Score(
     PPROCESS_STATS pStat
 ) {
     // Threshold and Weights
-    ULONG THRESHOLD_SCORE = 1000;
+    ULONG THRESHOLD_SCORE = 800;
     ULONG WEIGHT_WRITE = 10;
     ULONG WEIGHT_RENAME = 50;
-    ULONG WEIGHT_ENTROPY = 1;     // Entropy value is up to ~800, so 800 * 1 = 800 points
-    ULONG WEIGHT_UNSIGNED = 200;  // Penalty if process is not signed
+    ULONG MAX_ENTROPY_SCORE = 300; // Max entropy score is 300 points when entropy is ~800
+    ULONG WEIGHT_UNSIGNED = 400;  // Penalty if process is not signed
 
     ULONG totalScore = 0;
     ULONG write = 0;
@@ -1295,7 +1295,10 @@ BOOLEAN Score(
     // Calculate score with weights
     totalScore += (write * WEIGHT_WRITE);
     totalScore += (rename * WEIGHT_RENAME);
-    totalScore += (entropy * WEIGHT_ENTROPY);
+    
+    // Scale the entropy (0-800) to contribute a maximum of MAX_ENTROPY_SCORE
+    if (entropy > 800) entropy = 800;
+    totalScore += (entropy * MAX_ENTROPY_SCORE) / 800;
     
     // Only apply unsigned penalty if we explicitly know it's not signed
     if (pStat->IsSigned == 0) {
