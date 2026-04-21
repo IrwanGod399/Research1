@@ -1020,7 +1020,13 @@ BOOLEAN Prunning(
     if (NT_SUCCESS(nameStatus)) {
         PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
         RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] SendToUser: %s\n", imageName);
+        if (imageName) {
+            RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
+        }
+        else {
+            RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), "<NoName>");
+        }
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] SendToUser for killing: %s\n", imageName);
         ObDereferenceObject(pProcess);
     }
     PUNICODE_STRING pImageName = NULL;
@@ -1307,8 +1313,8 @@ BOOLEAN Score(
 
     // Check if total score exceeds threshold
     if (totalScore >= THRESHOLD_SCORE) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] RANSOMWARE DETECTED! Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n", 
-            totalScore, THRESHOLD_SCORE, &pStat->ImagePath, write, rename, entropy, pStat->IsSigned);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] RANSOMWARE DETECTED! Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n", totalScore, THRESHOLD_SCORE, &pStat->ImagePath, write, rename, entropy, pStat->IsSigned);
+        return TRUE;
     } else {
         // Only log if there's actual activity
         if (write > 0 || rename > 0 || entropy > 0) {
@@ -1317,7 +1323,7 @@ BOOLEAN Score(
         }
     }
 
-    return TRUE;
+    return FALSE;
 }
 
 FLT_PREOP_CALLBACK_STATUS
@@ -1340,6 +1346,7 @@ SpyPreOperationCallback(
             if (ProcessId <= 4) {
                 return FLT_PREOP_SUCCESS_NO_CALLBACK;
             }
+            PCHAR imageName = (PCHAR)PsGetProcessImageFileName(eProcess);
             if (mP == TRUE || mD == TRUE) {
                 PPROCESS_STATS pStat = GetList(pPathName, Data, FltObjects);
                 if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
@@ -1356,7 +1363,6 @@ SpyPreOperationCallback(
                         else if (mD == TRUE) {
                             ULONG Rename;
                             Rename = Owr(pStat, OP_TYPE_RENAME, Data, FltObjects);
-                            //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Rename: %u %wZ\n", Rename, pPathName);
                         }
                     }
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -1374,10 +1380,23 @@ SpyPreOperationCallback(
                         entropy = CalculateEntropyInteger(Data, FltObjects);
                         pStat->Entropy = entropy;
                         if(entropy > 0){
-Owr(pStat, OP_TYPE_WRITE, Data, FltObjects);
+                            Owr(pStat, OP_TYPE_WRITE, Data, FltObjects);
                         }
                         
-                        Score(pStat);
+              
+                        if (Score(pStat)) {
+                            HANDLE hProcess = NULL;
+                            NTSTATUS termStatus;
+                            termStatus = ObOpenObjectByPointer(eProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
+                            if (NT_SUCCESS(termStatus)) {
+                                DbgPrint("CoreSentinel: Terminating non-whitelisted process: %s\n", imageName ? imageName : "unknown");
+                                ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
+                                ZwClose(hProcess);
+                            }
+
+                            ObDereferenceObject(eProcess);
+                            Prunning(Data, FltObjects);
+                        }
                     }
                 }
 
