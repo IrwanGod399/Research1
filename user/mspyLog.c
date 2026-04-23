@@ -35,8 +35,37 @@ _Analysis_mode_(_Analysis_code_type_user_code_)
 
 #pragma comment (lib, "wintrust.lib")
 
+#define MAX_SIG_CACHE 1024
+typedef struct _SIG_CACHE_ENTRY {
+    WCHAR ImagePath[MAX_PATH];
+    INT IsSigned; // 1 for valid, 0 for invalid
+} SIG_CACHE_ENTRY;
 
-BOOLEAN
+SIG_CACHE_ENTRY SigCache[MAX_SIG_CACHE];
+int SigCacheCount = 0;
+
+INT CheckSigCache(const WCHAR* ImagePath) {
+    for (int i = 0; i < SigCacheCount; i++) {
+        if (_wcsicmp(SigCache[i].ImagePath, ImagePath) == 0) {
+            return SigCache[i].IsSigned;
+        }
+    }
+    return -1; // Not found
+}
+
+void AddSigCache(const WCHAR* ImagePath, INT IsSigned) {
+    if (SigCacheCount < MAX_SIG_CACHE) {
+        wcscpy_s(SigCache[SigCacheCount].ImagePath, MAX_PATH, ImagePath);
+        SigCache[SigCacheCount].IsSigned = IsSigned;
+        SigCacheCount++;
+    } else {
+        SigCacheCount = 0;
+        wcscpy_s(SigCache[SigCacheCount].ImagePath, MAX_PATH, ImagePath);
+        SigCache[SigCacheCount].IsSigned = IsSigned;
+        SigCacheCount++;
+    }
+}
+
 TranslateFileTag(
     _In_ PLOG_RECORD logRecord
     )
@@ -1160,27 +1189,34 @@ Return Value:
     const WCHAR* input = Name;
     WCHAR hasil[MAX_PATH];
     ConvertNtPathToWin32(input, hasil);
-    printf("Hasil Konversi: %S\n", input);
-    printf("Hasil Konversi: %S\n", hasil);
-    WCHAR command[1024];
-    char buffer[128];
-    swprintf_s(command, 1024, L"powershell -NoProfile -Command \"(Get-AuthenticodeSignature '%ls').Status.ToString()\"", hasil);
 
-    FILE* fp = _wpopen(command, L"r");
-    if (fp != NULL) {
-        if (fgets(buffer, sizeof(buffer), fp) != NULL) {
-            buffer[strcspn(buffer, "\r\n")] = 0;
-            HRESULT hResult = S_OK;
-            if (strcmp(buffer, "Valid") == 0) {
-                printf("Hasil: SIGNATURE VALID\n");
-                hResult = SendSig(Context->Port, (ULONG)RecordData->ProcessId, 1);
+    INT cacheResult = CheckSigCache(hasil);
+    if (cacheResult != -1) {
+        SendSig(Context->Port, (ULONG)RecordData->ProcessId, cacheResult);
+    } else {
+        printf("Hasil Konversi: %S\n", input);
+        printf("Hasil Konversi: %S\n", hasil);
+        WCHAR command[1024];
+        char buffer[128];
+        swprintf_s(command, 1024, L"powershell -NoProfile -Command \"(Get-AuthenticodeSignature '%ls').Status.ToString()\"", hasil);
+
+        FILE* fp = _wpopen(command, L"r");
+        if (fp != NULL) {
+            if (fgets(buffer, sizeof(buffer), fp) != NULL) {
+                buffer[strcspn(buffer, "\r\n")] = 0;
+                if (strcmp(buffer, "Valid") == 0) {
+                    printf("Hasil: SIGNATURE VALID\n");
+                    SendSig(Context->Port, (ULONG)RecordData->ProcessId, 1);
+                    AddSigCache(hasil, 1);
+                }
+                else {
+                    printf("Hasil: SIGNATURE TIDAK VALID / UNSIGNED\n");
+                    SendSig(Context->Port, (ULONG)RecordData->ProcessId, 0);
+                    AddSigCache(hasil, 0);
+                }
             }
-            else {
-                printf("Hasil: SIGNATURE TIDAK VALID / UNSIGNED\n");
-                hResult = SendSig(Context->Port, (ULONG)RecordData->ProcessId, 0);
-            }
+            _pclose(fp);
         }
-        _pclose(fp);
     }
     printf("Operation: ");
     if (RecordData->Flags & FLT_CALLBACK_DATA_IRP_OPERATION) {

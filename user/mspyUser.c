@@ -324,10 +324,7 @@ Mode(
     msg.Command = COMMAND_SWITCH_MODE;
     msg.Mode = s;
     msg.Time = time;
-    if (s == 1) {
-        printf("Profiling...\n");
-    }
-    else {
+    if (s == 2) {
         printf("Detecting...\n");
     }
 
@@ -667,20 +664,7 @@ Return Value:
             //
             INT modeValue = 0;
             switch (parm[1]) {
-            case 'p':
-                parmIndex++;
-                if (parmIndex >= argc) {
-                    printf("Error: Masukkan angka untuk argumen mode!\n");
-                    break;
-                }
-                parm = argv[parmIndex];
-                modeValue = atoi(parm);
-
-                hResult = Mode(Context->Port, 1, modeValue);
-                returnValue = EXIT_INTERPRETER;
-                goto InterpretCommand_Exit;
             case 'z':
-                
                 hResult = Mode(Context->Port, 2, modeValue);
                 returnValue = EXIT_INTERPRETER;
                 goto InterpretCommand_Exit;

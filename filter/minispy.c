@@ -1,4 +1,4 @@
-﻿/*++
+/*++
 
 Copyright (c) 1989-2002  Microsoft Corporation
 
@@ -154,7 +154,6 @@ BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
 }
 //=============================================================================
 //==========================================================================
-BOOLEAN mP = FALSE;
 BOOLEAN mD = FALSE;
 VOID WhitelistExistingProcesses() {
     NTSTATUS status;
@@ -211,60 +210,6 @@ VOID WhitelistExistingProcesses() {
 
     ExFreePool(buffer);
 }
-ULONG Pwrite = 0;
-ULONG Prename = 0;
-VOID EndProfiling() {
-    PLIST_ENTRY entry;
-    ULONG Twrite = 0;
-    ULONG Trename = 0;
-    ULONG Tproc = 0;
-    for (entry = g_ProcessStatsList.Flink; entry != &g_ProcessStatsList; entry = entry->Flink) {
-        PPROCESS_STATS candidate = CONTAINING_RECORD(entry, PROCESS_STATS, ListEntry);
-        if (candidate->FileWriteCount > 0) {
-            Twrite += candidate->FileWriteCount;
-        }
-        if (candidate->FileRenameCount > 0) {
-            Trename += candidate->FileRenameCount;
-        }
-        candidate->FileWriteCount = 0;
-        candidate->FileRenameCount = 0;
-        Tproc++;
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Proc %wZ\n", &candidate->ImagePath);
-    }
-    Pwrite = Twrite;
-    Prename = Trename;
-    mP = FALSE;
-    mD = FALSE;
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] P/W/R: %d/%d/%d\n", Tproc, Twrite, Trename);
-}
-
-VOID Testing1() {
-    // Removed test print
-}
-
-KTIMER Timer;
-KDPC TimerDpc;
-LARGE_INTEGER Timeout;
-VOID TimerRoutine(PKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2) {
-    UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(DeferredContext);
-    UNREFERENCED_PARAMETER(SystemArgument1);
-    UNREFERENCED_PARAMETER(SystemArgument2);
-    EndProfiling();
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Profiling done\n");
-    KeCancelTimer(&Timer);
-}
-
-VOID SetTimer(INT time) {
-    KeInitializeTimer(&Timer);
-    KeInitializeDpc(&TimerDpc, TimerRoutine, NULL);
-    Timeout.QuadPart = -10000000LL * time;
-    KeSetTimerEx(&Timer, Timeout, 5000, &TimerDpc);
-}
-//VOID UnsetTimer() {
-//    KeCancelTimer(&Timer);
-//    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Driver Unloaded\n");
-//}
 
 NTSTATUS
 DriverEntry (
@@ -525,9 +470,6 @@ Return Value:
     FltCloseCommunicationPort( MiniSpyData.ServerPort );
 
     FltUnregisterFilter( MiniSpyData.Filter );
-    if (mP == TRUE) {
-        KeCancelTimer(&Timer);
-    }
     
     SpyEmptyOutputBufferList();
     ExDeleteNPagedLookasideList( &MiniSpyData.FreeBufferList );
@@ -597,16 +539,21 @@ BOOLEAN SendToUserSpace(
         PCHAR imageName = (PCHAR)PsGetProcessImageFileName(pProcess);
         RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), imageName);
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] SendToUser: %s\n", imageName);
-        ObDereferenceObject(pProcess);
     }
     PUNICODE_STRING pImageName = NULL;
-    NTSTATUS path = SeLocateProcessImageName(pProcess, &pImageName);
+    NTSTATUS path = STATUS_UNSUCCESSFUL;
+    if (pProcess) {
+        path = SeLocateProcessImageName(pProcess, &pImageName);
+    }
     if (NT_SUCCESS(path) && pImageName != NULL) {
         nameToUse = pImageName;
         ExFreePool(pImageName);
     }
     else {
         nameToUse = &unknownName;
+    }
+    if (pProcess) {
+        ObDereferenceObject(pProcess);
     }
 
 
@@ -646,6 +593,7 @@ PPROCESS_STATS GetList(
     PLIST_ENTRY entry;
     PPROCESS_STATS pStats = NULL;
     LARGE_INTEGER currentTime;
+    BOOLEAN shouldSendToUserSpace = FALSE;
     KeQuerySystemTime(&currentTime);
     KeAcquireGuardedMutex(&g_StatsLock);
 
@@ -675,7 +623,7 @@ PPROCESS_STATS GetList(
                 UNICODE_STRING usersDir = RTL_CONSTANT_STRING(L"\\Users\\");
                 if (FsRtlIsNameInExpression(&usersDir, &pStats->ImagePath, TRUE, NULL) ||
                     wcsstr(pStats->ImagePath.Buffer, L"\\Users\\") != NULL) {
-                    SendToUserSpace(Data, FltObjects);
+                    shouldSendToUserSpace = TRUE;
                 } else {
                     pStats->IsSigned = 1;
                 }
@@ -684,6 +632,11 @@ PPROCESS_STATS GetList(
         }
     }
     KeReleaseGuardedMutex(&g_StatsLock);
+    
+    if (shouldSendToUserSpace) {
+        SendToUserSpace(Data, FltObjects);
+    }
+    
     return pStats;
 }
 PPROCESS_STATS TList(
@@ -810,31 +763,17 @@ Return Value:
                 try {
                     PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
                     LARGE_INTEGER cTime;
-                    INT time = msg->Time;
                     KeQuerySystemTime(&cTime);
                     sTime = cTime;
-                    if (msg->Mode == 1) {
-                        if (mP == TRUE) {
-                            mP = FALSE;
-                        }
-                        else {
-                            mP = TRUE;
-                            ClearAllProcessStats();
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Timer: %d\n", time);
-                            SetTimer(time);
-                        }
-                        mD = FALSE;
-                    }
-                    else if (msg->Mode == 2) {
+                    if (msg->Mode == 2) {
                         if (mD == TRUE) {
                             mD = FALSE;
                         }
                         else {
                             mD = TRUE;
                         }
-                        mP = FALSE;
                     }
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] mP:%u mD:%u\n", mP, mD);
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] mD:%u\n", mD);
                 }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
                     status = GetExceptionCode();
                 }
@@ -851,9 +790,13 @@ Return Value:
                     if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)Pid, &eProcess))) {
                         if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
                             PPROCESS_STATS test = TList(pPathName);
-                            test->IsSigned = IsSigned;
-                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig: %wZ, %d\n", &test->ImagePath, test->IsSigned);
+                            if (test != NULL) {
+                                test->IsSigned = IsSigned;
+                                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig: %wZ, %d\n", &test->ImagePath, test->IsSigned);
+                            }
+                            ExFreePool(pPathName);
                         }
+                        ObDereferenceObject(eProcess);
                     }
                     
                     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig processed\n");
@@ -1027,16 +970,21 @@ BOOLEAN Prunning(
             RtlStringCbCopyA(recordList->LogRecord.Data.ProcessName, sizeof(recordList->LogRecord.Data.ProcessName), "<NoName>");
         }
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] SendToUser for killing: %s\n", imageName);
-        ObDereferenceObject(pProcess);
     }
     PUNICODE_STRING pImageName = NULL;
-    NTSTATUS path = SeLocateProcessImageName(pProcess, &pImageName);
+    NTSTATUS path = STATUS_UNSUCCESSFUL;
+    if (pProcess) {
+        path = SeLocateProcessImageName(pProcess, &pImageName);
+    }
     if (NT_SUCCESS(path) && pImageName != NULL) {
         nameToUse = pImageName;
         ExFreePool(pImageName);
     }
     else {
         nameToUse = &unknownName;
+    }
+    if (pProcess) {
+        ObDereferenceObject(pProcess);
     }
     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
     Data->IoStatus.Information = 0;
@@ -1073,46 +1021,7 @@ BOOLEAN Prunning(
 
 
 
-BOOLEAN Profiling(
-    PPROCESS_STATS pStats,
-    OP_TYPE OpType,
-    _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_ PCFLT_RELATED_OBJECTS FltObjects)
-{
-    NTSTATUS status;
-    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
-    if (FltObjects->FileObject != NULL) {
 
-        status = FltGetFileNameInformation(Data,
-            FLT_FILE_NAME_NORMALIZED |
-            MiniSpyData.NameQueryMethod,
-            &nameInfo);
-        if (NT_SUCCESS(status)) {
-            if (OpType == OP_TYPE_WRITE) {
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Write: %wZ\n", &nameInfo->Name);
-            }
-            else if (OpType == OP_TYPE_RENAME) {
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Rename: %wZ\n", &nameInfo->Name);
-            }
-            FltReleaseFileNameInformation(nameInfo);
-        }
-
-            
-    }
-    else {
-        status = STATUS_UNSUCCESSFUL;
-    }
-    
-    if (OpType == OP_TYPE_WRITE) {
-        pStats->FileWriteCount++;
-    }
-    else if (OpType == OP_TYPE_RENAME) {
-        pStats->FileRenameCount++;
-    }
-
-    return TRUE;
-
-}
 
 ULONG Owr(
     PPROCESS_STATS pStats,
@@ -1347,7 +1256,7 @@ SpyPreOperationCallback(
                 return FLT_PREOP_SUCCESS_NO_CALLBACK;
             }
             PCHAR imageName = (PCHAR)PsGetProcessImageFileName(eProcess);
-            if (mP == TRUE || mD == TRUE) {
+            if (mD == TRUE) {
                 PPROCESS_STATS pStat = GetList(pPathName, Data, FltObjects);
                 if (Data->Iopb->MajorFunction == IRP_MJ_SET_INFORMATION) {
                     Flag = 1;
@@ -1355,15 +1264,8 @@ SpyPreOperationCallback(
                         if (IsProcessWhitelisted(ProcessId)) {
                             return FLT_PREOP_SUCCESS_NO_CALLBACK;
                         }
-                        if (mP == TRUE) {
-
-                            if (Profiling(pStat, OP_TYPE_RENAME, Data, FltObjects)) {
-                            }
-                        }
-                        else if (mD == TRUE) {
-                            ULONG Rename;
-                            Rename = Owr(pStat, OP_TYPE_RENAME, Data, FltObjects);
-                        }
+                        ULONG Rename;
+                        Rename = Owr(pStat, OP_TYPE_RENAME, Data, FltObjects);
                     }
                     return FLT_PREOP_SUCCESS_NO_CALLBACK;
                 }
@@ -1372,10 +1274,7 @@ SpyPreOperationCallback(
                     if (IsProcessWhitelisted(ProcessId)) {
                         return FLT_PREOP_SUCCESS_NO_CALLBACK;
                     }
-                    if (mP == TRUE) {
-                        Profiling(pStat, OP_TYPE_WRITE, Data, FltObjects);
-                    }
-                    else if (mD == TRUE) {
+
                         ULONG entropy = 0;
                         entropy = CalculateEntropyInteger(Data, FltObjects);
                         pStat->Entropy = entropy;
@@ -1394,10 +1293,11 @@ SpyPreOperationCallback(
                                 ZwClose(hProcess);
                             }
 
-                            ObDereferenceObject(eProcess);
                             Prunning(Data, FltObjects);
+                            ExFreePool(pPathName);
+                            ObDereferenceObject(eProcess);
+                            return FLT_PREOP_COMPLETE;
                         }
-                    }
                 }
 
                 //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", pPathName);
