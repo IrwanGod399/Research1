@@ -33,21 +33,21 @@ FAST_MUTEX g_TargetListLock;
 //---------------------------------------------------------------------------
 DRIVER_INITIALIZE DriverEntry;
 NTSTATUS
-DriverEntry (
+DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath
-    );
+);
 
 
 NTSTATUS
-SpyMessage (
+SpyMessage(
     _In_ PVOID ConnectionCookie,
     _In_reads_bytes_opt_(InputBufferSize) PVOID InputBuffer,
     _In_ ULONG InputBufferSize,
-    _Out_writes_bytes_to_opt_(OutputBufferSize,*ReturnOutputBufferLength) PVOID OutputBuffer,
+    _Out_writes_bytes_to_opt_(OutputBufferSize, *ReturnOutputBufferLength) PVOID OutputBuffer,
     _In_ ULONG OutputBufferSize,
     _Out_ PULONG ReturnOutputBufferLength
-    );
+);
 
 NTSTATUS
 SpyConnect(
@@ -55,18 +55,18 @@ SpyConnect(
     _In_ PVOID ServerPortCookie,
     _In_reads_bytes_(SizeOfContext) PVOID ConnectionContext,
     _In_ ULONG SizeOfContext,
-    _Flt_ConnectionCookie_Outptr_ PVOID *ConnectionCookie
-    );
+    _Flt_ConnectionCookie_Outptr_ PVOID* ConnectionCookie
+);
 
 VOID
 SpyDisconnect(
     _In_opt_ PVOID ConnectionCookie
-    );
+);
 
 NTSTATUS
-SpyEnlistInTransaction (
+SpyEnlistInTransaction(
     _In_ PCFLT_RELATED_OBJECTS FltObjects
-    );
+);
 
 VOID
 CoreSentinelWorkItemRoutine(
@@ -89,18 +89,18 @@ RtlFindUnicodeSubstring(
 //---------------------------------------------------------------------------
 
 #ifdef ALLOC_PRAGMA
-    #pragma alloc_text(INIT, DriverEntry)
-    #pragma alloc_text(PAGE, SpyFilterUnload)
-    #pragma alloc_text(PAGE, SpyQueryTeardown)
-    #pragma alloc_text(PAGE, SpyConnect)
-    #pragma alloc_text(PAGE, SpyDisconnect)
-    #pragma alloc_text(PAGE, SpyMessage)
+#pragma alloc_text(INIT, DriverEntry)
+#pragma alloc_text(PAGE, SpyFilterUnload)
+#pragma alloc_text(PAGE, SpyQueryTeardown)
+#pragma alloc_text(PAGE, SpyConnect)
+#pragma alloc_text(PAGE, SpyDisconnect)
+#pragma alloc_text(PAGE, SpyMessage)
 #endif
 
 
 #define SetFlagInterlocked(_ptrFlags,_flagToSet) \
     ((VOID)InterlockedOr(((volatile LONG *)(_ptrFlags)),_flagToSet))
-    
+
 //---------------------------------------------------------------------------
 //                      ROUTINES
 //---------------------------------------------------------------------------
@@ -119,13 +119,13 @@ BOOLEAN AddPathToWhitelist(PUNICODE_STRING Path) {
 
         if (RtlEqualUnicodeString(Path, &pEntry->ImagePath, TRUE)) {
             isDuplicate = TRUE;
-            break; 
+            break;
         }
     }
 
     if (isDuplicate) {
         KeReleaseGuardedMutex(&g_WhitelistLock);
-         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Skip Dup Path: %wZ\n", Path);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Skip Dup Path: %wZ\n", Path);
         return FALSE;
     }
 
@@ -177,10 +177,10 @@ VOID WhitelistExistingProcesses() {
         return;
     }
     status = ZwQuerySystemInformation(SystemProcessInformation, buffer, bufferSize, &returnLength);
-    
+
     if (NT_SUCCESS(status)) {
         pInfo = (PSYSTEM_PROCESS_INFORMATION)buffer;
-        
+
 
         KeAcquireGuardedMutex(&g_StatsLock);
 
@@ -212,10 +212,10 @@ VOID WhitelistExistingProcesses() {
 }
 
 NTSTATUS
-DriverEntry (
+DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath
-    )
+)
 /*++
 
 Routine Description:
@@ -251,8 +251,8 @@ Return Value:
 
         MiniSpyData.DriverObject = DriverObject;
 
-        InitializeListHead( &MiniSpyData.OutputBufferList );
-        KeInitializeSpinLock( &MiniSpyData.OutputBufferLock );
+        InitializeListHead(&MiniSpyData.OutputBufferList);
+        KeInitializeSpinLock(&MiniSpyData.OutputBufferLock);
         InitializeListHead(&g_TargetListHead);
         ExInitializeFastMutex(&g_TargetListLock);
         InitializeListHead(&g_ProcessStatsList);
@@ -261,13 +261,13 @@ Return Value:
         KeInitializeGuardedMutex(&g_WhitelistLock);
         //WhitelistExistingProcesses();
 
-        ExInitializeNPagedLookasideList( &MiniSpyData.FreeBufferList,
-                                         NULL,
-                                         NULL,
-                                         POOL_NX_ALLOCATION,
-                                         RECORD_SIZE,
-                                         SPY_TAG,
-                                         0 );
+        ExInitializeNPagedLookasideList(&MiniSpyData.FreeBufferList,
+            NULL,
+            NULL,
+            POOL_NX_ALLOCATION,
+            RECORD_SIZE,
+            SPY_TAG,
+            0);
 
 #if MINISPY_VISTA
 
@@ -277,9 +277,9 @@ Return Value:
 
 #pragma warning(push)
 #pragma warning(disable:4055) // type cast from data pointer to function pointer
-        MiniSpyData.PFltSetTransactionContext = (PFLT_SET_TRANSACTION_CONTEXT) FltGetRoutineAddress( "FltSetTransactionContext" );
-        MiniSpyData.PFltGetTransactionContext = (PFLT_GET_TRANSACTION_CONTEXT) FltGetRoutineAddress( "FltGetTransactionContext" );
-        MiniSpyData.PFltEnlistInTransaction = (PFLT_ENLIST_IN_TRANSACTION) FltGetRoutineAddress( "FltEnlistInTransaction" );
+        MiniSpyData.PFltSetTransactionContext = (PFLT_SET_TRANSACTION_CONTEXT)FltGetRoutineAddress("FltSetTransactionContext");
+        MiniSpyData.PFltGetTransactionContext = (PFLT_GET_TRANSACTION_CONTEXT)FltGetRoutineAddress("FltGetTransactionContext");
+        MiniSpyData.PFltEnlistInTransaction = (PFLT_ENLIST_IN_TRANSACTION)FltGetRoutineAddress("FltEnlistInTransaction");
 #pragma warning(pop)
 
 #endif
@@ -294,43 +294,43 @@ Return Value:
         //  Now that our global configuration is complete, register with FltMgr.
         //
 
-        status = FltRegisterFilter( DriverObject,
-                                    &FilterRegistration,
-                                    &MiniSpyData.Filter );
+        status = FltRegisterFilter(DriverObject,
+            &FilterRegistration,
+            &MiniSpyData.Filter);
 
-        if (!NT_SUCCESS( status )) {
+        if (!NT_SUCCESS(status)) {
 
-           leave;
-        }
-
-
-        status  = FltBuildDefaultSecurityDescriptor( &sd,
-                                                     FLT_PORT_ALL_ACCESS );
-
-        if (!NT_SUCCESS( status )) {
             leave;
         }
 
-        RtlInitUnicodeString( &uniString, MINISPY_PORT_NAME );
 
-        InitializeObjectAttributes( &oa,
-                                    &uniString,
-                                    OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
-                                    NULL,
-                                    sd );
+        status = FltBuildDefaultSecurityDescriptor(&sd,
+            FLT_PORT_ALL_ACCESS);
 
-        status = FltCreateCommunicationPort( MiniSpyData.Filter,
-                                             &MiniSpyData.ServerPort,
-                                             &oa,
-                                             NULL,
-                                             SpyConnect,
-                                             SpyDisconnect,
-                                             SpyMessage,
-                                             1 );
+        if (!NT_SUCCESS(status)) {
+            leave;
+        }
 
-        FltFreeSecurityDescriptor( sd );
+        RtlInitUnicodeString(&uniString, MINISPY_PORT_NAME);
 
-        if (!NT_SUCCESS( status )) {
+        InitializeObjectAttributes(&oa,
+            &uniString,
+            OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+            NULL,
+            sd);
+
+        status = FltCreateCommunicationPort(MiniSpyData.Filter,
+            &MiniSpyData.ServerPort,
+            &oa,
+            NULL,
+            SpyConnect,
+            SpyDisconnect,
+            SpyMessage,
+            1);
+
+        FltFreeSecurityDescriptor(sd);
+
+        if (!NT_SUCCESS(status)) {
             leave;
         }
 
@@ -338,21 +338,22 @@ Return Value:
         //  We are now ready to start filtering
         //
 
-        status = FltStartFiltering( MiniSpyData.Filter );
+        status = FltStartFiltering(MiniSpyData.Filter);
 
-    } finally {
+    }
+    finally {
 
-        if (!NT_SUCCESS( status ) ) {
+        if (!NT_SUCCESS(status)) {
 
-             if (NULL != MiniSpyData.ServerPort) {
-                 FltCloseCommunicationPort( MiniSpyData.ServerPort );
-             }
+            if (NULL != MiniSpyData.ServerPort) {
+                FltCloseCommunicationPort(MiniSpyData.ServerPort);
+            }
 
-             if (NULL != MiniSpyData.Filter) {
-                 FltUnregisterFilter( MiniSpyData.Filter );
-             }
+            if (NULL != MiniSpyData.Filter) {
+                FltUnregisterFilter(MiniSpyData.Filter);
+            }
 
-             ExDeleteNPagedLookasideList( &MiniSpyData.FreeBufferList );
+            ExDeleteNPagedLookasideList(&MiniSpyData.FreeBufferList);
         }
     }
 
@@ -365,8 +366,8 @@ SpyConnect(
     _In_ PVOID ServerPortCookie,
     _In_reads_bytes_(SizeOfContext) PVOID ConnectionContext,
     _In_ ULONG SizeOfContext,
-    _Flt_ConnectionCookie_Outptr_ PVOID *ConnectionCookie
-    )
+    _Flt_ConnectionCookie_Outptr_ PVOID* ConnectionCookie
+)
 /*++
 
 Routine Description
@@ -391,12 +392,12 @@ Return Value
 
     PAGED_CODE();
 
-    UNREFERENCED_PARAMETER( ServerPortCookie );
-    UNREFERENCED_PARAMETER( ConnectionContext );
-    UNREFERENCED_PARAMETER( SizeOfContext);
-    UNREFERENCED_PARAMETER( ConnectionCookie );
+    UNREFERENCED_PARAMETER(ServerPortCookie);
+    UNREFERENCED_PARAMETER(ConnectionContext);
+    UNREFERENCED_PARAMETER(SizeOfContext);
+    UNREFERENCED_PARAMETER(ConnectionCookie);
 
-    FLT_ASSERT( MiniSpyData.ClientPort == NULL );
+    FLT_ASSERT(MiniSpyData.ClientPort == NULL);
     MiniSpyData.ClientPort = ClientPort;
     return STATUS_SUCCESS;
 }
@@ -405,7 +406,7 @@ Return Value
 VOID
 SpyDisconnect(
     _In_opt_ PVOID ConnectionCookie
-   )
+)
 /*++
 
 Routine Description
@@ -424,19 +425,19 @@ Return value
 
     PAGED_CODE();
 
-    UNREFERENCED_PARAMETER( ConnectionCookie );
+    UNREFERENCED_PARAMETER(ConnectionCookie);
 
     //
     //  Close our handle
     //
 
-    FltCloseClientPort( MiniSpyData.Filter, &MiniSpyData.ClientPort );
+    FltCloseClientPort(MiniSpyData.Filter, &MiniSpyData.ClientPort);
 }
 
 NTSTATUS
-SpyFilterUnload (
+SpyFilterUnload(
     _In_ FLT_FILTER_UNLOAD_FLAGS Flags
-    )
+)
 /*++
 
 Routine Description:
@@ -459,7 +460,7 @@ Return Value:
 
 --*/
 {
-    UNREFERENCED_PARAMETER( Flags );
+    UNREFERENCED_PARAMETER(Flags);
 
     PAGED_CODE();
 
@@ -467,21 +468,21 @@ Return Value:
     //  Close the server port. This will stop new connections.
     //
 
-    FltCloseCommunicationPort( MiniSpyData.ServerPort );
+    FltCloseCommunicationPort(MiniSpyData.ServerPort);
 
-    FltUnregisterFilter( MiniSpyData.Filter );
-    
+    FltUnregisterFilter(MiniSpyData.Filter);
+
     SpyEmptyOutputBufferList();
-    ExDeleteNPagedLookasideList( &MiniSpyData.FreeBufferList );
+    ExDeleteNPagedLookasideList(&MiniSpyData.FreeBufferList);
     return STATUS_SUCCESS;
 }
 
 
 NTSTATUS
-SpyQueryTeardown (
+SpyQueryTeardown(
     _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags
-    )
+)
 /*++
 
 Routine Description:
@@ -499,8 +500,8 @@ Return Value:
 
 --*/
 {
-    UNREFERENCED_PARAMETER( FltObjects );
-    UNREFERENCED_PARAMETER( Flags );
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(Flags);
     PAGED_CODE();
     return STATUS_SUCCESS;
 }
@@ -624,7 +625,8 @@ PPROCESS_STATS GetList(
                 if (FsRtlIsNameInExpression(&usersDir, &pStats->ImagePath, TRUE, NULL) ||
                     wcsstr(pStats->ImagePath.Buffer, L"\\Users\\") != NULL) {
                     shouldSendToUserSpace = TRUE;
-                } else {
+                }
+                else {
                     pStats->IsSigned = 1;
                 }
             }
@@ -632,11 +634,11 @@ PPROCESS_STATS GetList(
         }
     }
     KeReleaseGuardedMutex(&g_StatsLock);
-    
+
     if (shouldSendToUserSpace) {
         SendToUserSpace(Data, FltObjects);
     }
-    
+
     return pStats;
 }
 PPROCESS_STATS TList(
@@ -680,14 +682,14 @@ VOID ClearAllProcessStats() {
 }
 LARGE_INTEGER sTime;
 NTSTATUS
-SpyMessage (
+SpyMessage(
     _In_ PVOID ConnectionCookie,
     _In_reads_bytes_opt_(InputBufferSize) PVOID InputBuffer,
     _In_ ULONG InputBufferSize,
-    _Out_writes_bytes_to_opt_(OutputBufferSize,*ReturnOutputBufferLength) PVOID OutputBuffer,
+    _Out_writes_bytes_to_opt_(OutputBufferSize, *ReturnOutputBufferLength) PVOID OutputBuffer,
     _In_ ULONG OutputBufferSize,
     _Out_ PULONG ReturnOutputBufferLength
-    )
+)
 /*++
 
 Routine Description:
@@ -722,7 +724,7 @@ Return Value:
 
     PAGED_CODE();
 
-    UNREFERENCED_PARAMETER( ConnectionCookie );
+    UNREFERENCED_PARAMETER(ConnectionCookie);
 
     //
     //                      **** PLEASE READ ****
@@ -741,186 +743,188 @@ Return Value:
     //
 
     if ((InputBuffer != NULL) &&
-        (InputBufferSize >= (FIELD_OFFSET(COMMAND_MESSAGE,Command) +
-                             sizeof(MINISPY_COMMAND)))) {
+        (InputBufferSize >= (FIELD_OFFSET(COMMAND_MESSAGE, Command) +
+            sizeof(MINISPY_COMMAND)))) {
 
-        try  {
+        try {
 
             //
             //  Probe and capture input message: the message is raw user mode
             //  buffer, so need to protect with exception handler
             //
 
-            command = ((PCOMMAND_MESSAGE) InputBuffer)->Command;
+            command = ((PCOMMAND_MESSAGE)InputBuffer)->Command;
 
-        } except (SpyExceptionFilter( GetExceptionInformation(), TRUE )) {
-        
+        } except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
+
             return GetExceptionCode();
         }
 
         switch (command) {
-            case COMMAND_SWITCH_MODE:
-                try {
-                    PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
-                    LARGE_INTEGER cTime;
-                    KeQuerySystemTime(&cTime);
-                    sTime = cTime;
-                    if (msg->Mode == 2) {
-                        if (mD == TRUE) {
-                            mD = FALSE;
-                        }
-                        else {
-                            mD = TRUE;
-                        }
+        case COMMAND_SWITCH_MODE:
+            try {
+                PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
+                LARGE_INTEGER cTime;
+                KeQuerySystemTime(&cTime);
+                sTime = cTime;
+                if (msg->Mode == 2) {
+                    if (mD == TRUE) {
+                        mD = FALSE;
                     }
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] mD:%u\n", mD);
-                }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
-                    status = GetExceptionCode();
-                }
-                status = STATUS_SUCCESS;
-                break;
-
-            case COMMAND_SIG_STATUS:
-                try {
-                    PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
-                    PEPROCESS eProcess = NULL;
-                    PUNICODE_STRING pPathName = NULL;
-                    ULONG Pid = msg->PID;
-                    INT IsSigned = msg->IsSigned;
-                    if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)Pid, &eProcess))) {
-                        if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
-                            PPROCESS_STATS test = TList(pPathName);
-                            if (test != NULL) {
-                                test->IsSigned = IsSigned;
-                                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig: %wZ, %d\n", &test->ImagePath, test->IsSigned);
-                            }
-                            ExFreePool(pPathName);
-                        }
-                        ObDereferenceObject(eProcess);
+                    else {
+                        mD = TRUE;
                     }
-                    
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig processed\n");
-                }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
-                    status = GetExceptionCode();
+                }
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] mD:%u\n", mD);
+            }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
+                status = GetExceptionCode();
+            }
+            status = STATUS_SUCCESS;
+            break;
+
+        case COMMAND_SIG_STATUS:
+            try {
+                PMINISPY_COMMAND_MSG msg = (PMINISPY_COMMAND_MSG)InputBuffer;
+                PEPROCESS eProcess = NULL;
+                PUNICODE_STRING pPathName = NULL;
+                ULONG Pid = msg->PID;
+                INT IsSigned = msg->IsSigned;
+                if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)Pid, &eProcess))) {
+                    if (NT_SUCCESS(SeLocateProcessImageName(eProcess, &pPathName)) && pPathName != NULL) {
+                        PPROCESS_STATS test = TList(pPathName);
+                        if (test != NULL) {
+                            test->IsSigned = IsSigned;
+                            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig: %wZ, %d\n", &test->ImagePath, test->IsSigned);
+                        }
+                        ExFreePool(pPathName);
+                    }
+                    ObDereferenceObject(eProcess);
                 }
 
-                status = STATUS_SUCCESS;
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Sig processed\n");
+            }except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
+                status = GetExceptionCode();
+            }
+
+            status = STATUS_SUCCESS;
+            break;
+        case GetMiniSpyLog:
+
+            //
+            //  Return as many log records as can fit into the OutputBuffer
+            //
+
+            if ((OutputBuffer == NULL) || (OutputBufferSize == 0)) {
+
+                status = STATUS_INVALID_PARAMETER;
                 break;
-            case GetMiniSpyLog:
+            }
 
-                //
-                //  Return as many log records as can fit into the OutputBuffer
-                //
-
-                if ((OutputBuffer == NULL) || (OutputBufferSize == 0)) {
-
-                    status = STATUS_INVALID_PARAMETER;
-                    break;
-                }
-
-                //
-                //  We want to validate that the given buffer is POINTER
-                //  aligned.  But if this is a 64bit system and we want to
-                //  support 32bit applications we need to be careful with how
-                //  we do the check.  Note that the way SpyGetLog is written
-                //  it actually does not care about alignment but we are
-                //  demonstrating how to do this type of check.
-                //
+            //
+            //  We want to validate that the given buffer is POINTER
+            //  aligned.  But if this is a 64bit system and we want to
+            //  support 32bit applications we need to be careful with how
+            //  we do the check.  Note that the way SpyGetLog is written
+            //  it actually does not care about alignment but we are
+            //  demonstrating how to do this type of check.
+            //
 
 #if defined(_WIN64)
 
-                if (IoIs32bitProcess( NULL )) {
-
-                    //
-                    //  Validate alignment for the 32bit process on a 64bit
-                    //  system
-                    //
-
-                    if (!IS_ALIGNED(OutputBuffer,sizeof(ULONG))) {
-
-                        status = STATUS_DATATYPE_MISALIGNMENT;
-                        break;
-                    }
-
-                } else {
-
-#endif
-
-                    if (!IS_ALIGNED(OutputBuffer,sizeof(PVOID))) {
-
-                        status = STATUS_DATATYPE_MISALIGNMENT;
-                        break;
-                    }
-
-#if defined(_WIN64)
-
-                }
-
-#endif
+            if (IoIs32bitProcess(NULL)) {
 
                 //
-                //  Get the log record.
+                //  Validate alignment for the 32bit process on a 64bit
+                //  system
                 //
 
-                status = SpyGetLog( OutputBuffer,
-                                    OutputBufferSize,
-                                    ReturnOutputBufferLength );
-                break;
-
-
-            case GetMiniSpyVersion:
-
-                //
-                //  Return version of the MiniSpy filter driver.  Verify
-                //  we have a valid user buffer including valid
-                //  alignment
-                //
-
-                if ((OutputBufferSize < sizeof( MINISPYVER )) ||
-                    (OutputBuffer == NULL)) {
-
-                    status = STATUS_INVALID_PARAMETER;
-                    break;
-                }
-
-                //
-                //  Validate Buffer alignment.  If a minifilter cares about
-                //  the alignment value of the buffer pointer they must do
-                //  this check themselves.  Note that a try/except will not
-                //  capture alignment faults.
-                //
-
-                if (!IS_ALIGNED(OutputBuffer,sizeof(ULONG))) {
+                if (!IS_ALIGNED(OutputBuffer, sizeof(ULONG))) {
 
                     status = STATUS_DATATYPE_MISALIGNMENT;
                     break;
                 }
 
-                //
-                //  Protect access to raw user-mode output buffer with an
-                //  exception handler
-                //
+            }
+            else {
 
-                try {
+#endif
 
-                    ((PMINISPYVER)OutputBuffer)->Major = MINISPY_MAJ_VERSION;
-                    ((PMINISPYVER)OutputBuffer)->Minor = MINISPY_MIN_VERSION;
+                if (!IS_ALIGNED(OutputBuffer, sizeof(PVOID))) {
 
-                } except (SpyExceptionFilter( GetExceptionInformation(), TRUE )) {
-
-                      return GetExceptionCode();
+                    status = STATUS_DATATYPE_MISALIGNMENT;
+                    break;
                 }
 
-                *ReturnOutputBufferLength = sizeof( MINISPYVER );
-                status = STATUS_SUCCESS;
-                break;
+#if defined(_WIN64)
 
-            default:
+            }
+
+#endif
+
+            //
+            //  Get the log record.
+            //
+
+            status = SpyGetLog(OutputBuffer,
+                OutputBufferSize,
+                ReturnOutputBufferLength);
+            break;
+
+
+        case GetMiniSpyVersion:
+
+            //
+            //  Return version of the MiniSpy filter driver.  Verify
+            //  we have a valid user buffer including valid
+            //  alignment
+            //
+
+            if ((OutputBufferSize < sizeof(MINISPYVER)) ||
+                (OutputBuffer == NULL)) {
+
                 status = STATUS_INVALID_PARAMETER;
                 break;
+            }
+
+            //
+            //  Validate Buffer alignment.  If a minifilter cares about
+            //  the alignment value of the buffer pointer they must do
+            //  this check themselves.  Note that a try/except will not
+            //  capture alignment faults.
+            //
+
+            if (!IS_ALIGNED(OutputBuffer, sizeof(ULONG))) {
+
+                status = STATUS_DATATYPE_MISALIGNMENT;
+                break;
+            }
+
+            //
+            //  Protect access to raw user-mode output buffer with an
+            //  exception handler
+            //
+
+            try {
+
+                ((PMINISPYVER)OutputBuffer)->Major = MINISPY_MAJ_VERSION;
+                ((PMINISPYVER)OutputBuffer)->Minor = MINISPY_MIN_VERSION;
+
+            } except(SpyExceptionFilter(GetExceptionInformation(), TRUE)) {
+
+                return GetExceptionCode();
+            }
+
+            *ReturnOutputBufferLength = sizeof(MINISPYVER);
+            status = STATUS_SUCCESS;
+            break;
+
+        default:
+            status = STATUS_INVALID_PARAMETER;
+            break;
         }
 
-    } else {
+    }
+    else {
 
         status = STATUS_INVALID_PARAMETER;
     }
@@ -1082,7 +1086,7 @@ ULONG Owr(
         pStats->FileWriteCount = 0;
         pStats->FileRenameCount = 0;
     }
- 
+
     if (OpType == OP_TYPE_WRITE) {
         return pStats->FileWriteCount;
     }
@@ -1108,7 +1112,7 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
 
     status = SeLocateProcessImageName(pProcess, &pImageName);
 
-    
+
 
 
     if (NT_SUCCESS(status) && pImageName != NULL) {
@@ -1118,7 +1122,7 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
 
             if (RtlEqualUnicodeString(pImageName, &pEntry->ImagePath, TRUE)) {
                 isSafe = TRUE;
-                break; 
+                break;
             }
         }
 
@@ -1129,6 +1133,7 @@ BOOLEAN IsProcessWhitelisted(ULONG ProcessId) {
     ObDereferenceObject(pProcess);
     return isSafe;
 }
+
 ULONG CalculateEntropyInteger(
     _Inout_ PFLT_CALLBACK_DATA Data,
     _In_ PCFLT_RELATED_OBJECTS FltObjects
@@ -1137,6 +1142,9 @@ ULONG CalculateEntropyInteger(
     PUCHAR buffer = NULL;
     ULONG length = Data->Iopb->Parameters.Write.Length;
     ULONG entropy = 0;
+#define ENTROPY_SAMPLE_CAP 8192
+    ULONG scanLength = (length > ENTROPY_SAMPLE_CAP) ? ENTROPY_SAMPLE_CAP : length;
+
     if (Data->Iopb->Parameters.Write.MdlAddress) {
         buffer = (PUCHAR)MmGetSystemAddressForMdlSafe(Data->Iopb->Parameters.Write.MdlAddress, NormalPagePriority);
     }
@@ -1144,25 +1152,25 @@ ULONG CalculateEntropyInteger(
         buffer = (PUCHAR)Data->Iopb->Parameters.Write.WriteBuffer;
     }
 
-    if (buffer && length >= 512) {
-        
+    if (buffer && scanLength >= 512) {
+
         ULONG counts[256] = { 0 };
         ULONG entropyScaled = 0;
 
-        for (ULONG i = 0; i < length; i++) {
+        for (ULONG i = 0; i < scanLength; i++) {
             counts[buffer[i]]++;
         }
 
         for (int i = 0; i < 256; i++) {
             if (counts[i] > 0) {
-                ULONG index = (counts[i] * 256) / length;
+                ULONG index = (counts[i] * 256) / scanLength;
                 if (index > 256) index = 256;
                 if (index == 0) index = 1;
 
                 entropyScaled += (counts[i] * Log2Table[index]);
             }
         }
-        entropy = (entropyScaled * 100) / (length * 1024);
+        entropy = (entropyScaled * 100) / (scanLength * 1024);
         if (entropy > 750) {
             NTSTATUS status;
             PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
@@ -1181,22 +1189,21 @@ ULONG CalculateEntropyInteger(
             else {
                 status = STATUS_UNSUCCESSFUL;
             }
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] WARN High Entropy (%u/800) PID %u\n",entropy, (ULONG)FltGetRequestorProcessId(Data));
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] WARN High Entropy (%u/800) PID %u\n", entropy, (ULONG)FltGetRequestorProcessId(Data));
         }
     }
 
     return entropy;
 }
-
 BOOLEAN Score(
     PPROCESS_STATS pStat
 ) {
-    // Threshold and Weights
+
     ULONG THRESHOLD_SCORE = 800;
-    ULONG WEIGHT_WRITE = 10;
-    ULONG WEIGHT_RENAME = 50;
-    ULONG MAX_ENTROPY_SCORE = 300; // Max entropy score is 300 points when entropy is ~800
-    ULONG WEIGHT_UNSIGNED = 400;  // Penalty if process is not signed
+    ULONG WEIGHT_WRITE = 1;
+    ULONG WEIGHT_RENAME = 5;
+    ULONG MAX_ENTROPY_SCORE = 400; 
+    ULONG WEIGHT_UNSIGNED = 350; 
 
     ULONG totalScore = 0;
     ULONG write = 0;
@@ -1207,27 +1214,26 @@ BOOLEAN Score(
     rename = pStat->FileRenameCount;
     entropy = pStat->Entropy;
 
-    // Calculate score with weights
     totalScore += (write * WEIGHT_WRITE);
     totalScore += (rename * WEIGHT_RENAME);
-    
-    // Scale the entropy (0-800) to contribute a maximum of MAX_ENTROPY_SCORE
+
+
     if (entropy > 800) entropy = 800;
     totalScore += (entropy * MAX_ENTROPY_SCORE) / 800;
-    
-    // Only apply unsigned penalty if we explicitly know it's not signed
+
     if (pStat->IsSigned == 0) {
         totalScore += WEIGHT_UNSIGNED;
     }
 
-    // Check if total score exceeds threshold
+
     if (totalScore >= THRESHOLD_SCORE) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] RANSOMWARE DETECTED! Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n", totalScore, THRESHOLD_SCORE, &pStat->ImagePath, write, rename, entropy, pStat->IsSigned);
         return TRUE;
-    } else {
-        // Only log if there's actual activity
+    }
+    else {
+
         if (write > 0 || rename > 0 || entropy > 0) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n", 
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "[CS] Score: %u/%u | %wZ W:%u R:%u E:%u Sig:%d\n",
                 totalScore, THRESHOLD_SCORE, &pStat->ImagePath, write, rename, entropy, pStat->IsSigned);
         }
     }
@@ -1275,29 +1281,29 @@ SpyPreOperationCallback(
                         return FLT_PREOP_SUCCESS_NO_CALLBACK;
                     }
 
-                        ULONG entropy = 0;
-                        entropy = CalculateEntropyInteger(Data, FltObjects);
-                        pStat->Entropy = entropy;
-                        if(entropy > 0){
-                            Owr(pStat, OP_TYPE_WRITE, Data, FltObjects);
-                        }
-                        
-              
-                        if (Score(pStat)) {
-                            HANDLE hProcess = NULL;
-                            NTSTATUS termStatus;
-                            termStatus = ObOpenObjectByPointer(eProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
-                            if (NT_SUCCESS(termStatus)) {
-                                DbgPrint("CoreSentinel: Terminating non-whitelisted process: %s\n", imageName ? imageName : "unknown");
-                                ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
-                                ZwClose(hProcess);
-                            }
+                    ULONG entropy = 0;
+                    entropy = CalculateEntropyInteger(Data, FltObjects);
+                    pStat->Entropy = entropy;
+                    if (entropy > 0) {
+                        Owr(pStat, OP_TYPE_WRITE, Data, FltObjects);
+                    }
 
-                            Prunning(Data, FltObjects);
-                            ExFreePool(pPathName);
-                            ObDereferenceObject(eProcess);
-                            return FLT_PREOP_COMPLETE;
+
+                    if (Score(pStat)) {
+                        HANDLE hProcess = NULL;
+                        NTSTATUS termStatus;
+                        termStatus = ObOpenObjectByPointer(eProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_TERMINATE, *PsProcessType, KernelMode, &hProcess);
+                        if (NT_SUCCESS(termStatus)) {
+                            DbgPrint("CoreSentinel: Terminating non-whitelisted process: %s\n", imageName ? imageName : "unknown");
+                            ZwTerminateProcess(hProcess, STATUS_ACCESS_DENIED);
+                            ZwClose(hProcess);
                         }
+
+                        Prunning(Data, FltObjects);
+                        ExFreePool(pPathName);
+                        ObDereferenceObject(eProcess);
+                        return FLT_PREOP_COMPLETE;
+                    }
                 }
 
                 //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Path: %wZ\n", pPathName);
@@ -1318,14 +1324,14 @@ SpyPreOperationCallback(
 }
 
 NTSTATUS
-SpyEnlistInTransaction (
+SpyEnlistInTransaction(
     _In_ PCFLT_RELATED_OBJECTS FltObjects
-    )
+)
 /*++
 
 Routine Description
 
-    Minispy calls this function to enlist in a transaction of interest. 
+    Minispy calls this function to enlist in a transaction of interest.
 
 Arguments
 
@@ -1335,7 +1341,7 @@ Return value
 
     Returns STATUS_SUCCESS if we were able to successfully enlist in a new transcation or if we
     were alreazdy enlisted in the transaction. Returns an appropriate error code on a failure.
-    
+
 --*/
 {
 
@@ -1345,7 +1351,7 @@ Return value
     PMINISPY_TRANSACTION_CONTEXT oldTransactionContext = NULL;
     PRECORD_LIST recordList;
     NTSTATUS status;
-    static ULONG Sequence=1;
+    static ULONG Sequence = 1;
 
     //
     //  This code is only built in the Vista environment, but
@@ -1366,11 +1372,11 @@ Return value
     //  one we have already enlisted in this transaction.
     //
 
-    status = (*MiniSpyData.PFltGetTransactionContext)( FltObjects->Instance,
-                                                       FltObjects->Transaction,
-                                                       &transactionContext );
+    status = (*MiniSpyData.PFltGetTransactionContext)(FltObjects->Instance,
+        FltObjects->Transaction,
+        &transactionContext);
 
-    if (NT_SUCCESS( status )) {
+    if (NT_SUCCESS(status)) {
 
         // 
         //  Check if we have already enlisted in the transaction. 
@@ -1382,15 +1388,15 @@ Return value
             //  FltGetTransactionContext puts a reference on the context. Release
             //  that now and return success.
             //
-            
-            FltReleaseContext( transactionContext );
+
+            FltReleaseContext(transactionContext);
             return STATUS_SUCCESS;
         }
 
         //
         //  If we have not enlisted then we need to try and enlist in the transaction.
         //
-        
+
         goto ENLIST_IN_TRANSACTION;
     }
 
@@ -1408,13 +1414,13 @@ Return value
     //  Allocate a transaction context.
     //
 
-    status = FltAllocateContext( FltObjects->Filter,
-                                 FLT_TRANSACTION_CONTEXT,
-                                 sizeof(MINISPY_TRANSACTION_CONTEXT),
-                                 PagedPool,
-                                 &transactionContext );
+    status = FltAllocateContext(FltObjects->Filter,
+        FLT_TRANSACTION_CONTEXT,
+        sizeof(MINISPY_TRANSACTION_CONTEXT),
+        PagedPool,
+        &transactionContext);
 
-    if (!NT_SUCCESS( status )) {
+    if (!NT_SUCCESS(status)) {
 
         return status;
     }
@@ -1426,17 +1432,17 @@ Return value
     RtlZeroMemory(transactionContext, sizeof(MINISPY_TRANSACTION_CONTEXT));
     transactionContext->Count = Sequence++;
 
-    FLT_ASSERT( MiniSpyData.PFltSetTransactionContext );
+    FLT_ASSERT(MiniSpyData.PFltSetTransactionContext);
 
-    status = (*MiniSpyData.PFltSetTransactionContext)( FltObjects->Instance,
-                                                       FltObjects->Transaction,
-                                                       FLT_SET_CONTEXT_KEEP_IF_EXISTS,
-                                                       transactionContext,
-                                                       &oldTransactionContext );
+    status = (*MiniSpyData.PFltSetTransactionContext)(FltObjects->Instance,
+        FltObjects->Transaction,
+        FLT_SET_CONTEXT_KEEP_IF_EXISTS,
+        transactionContext,
+        &oldTransactionContext);
 
-    if (!NT_SUCCESS( status )) {
+    if (!NT_SUCCESS(status)) {
 
-        FltReleaseContext( transactionContext );    //this will free the context
+        FltReleaseContext(transactionContext);    //this will free the context
 
         if (status != STATUS_FLT_CONTEXT_ALREADY_DEFINED) {
 
@@ -1444,15 +1450,15 @@ Return value
         }
 
         FLT_ASSERT(oldTransactionContext != NULL);
-        
+
         if (FlagOn(oldTransactionContext->Flags, MINISPY_ENLISTED_IN_TRANSACTION)) {
 
             //
             //  If this context is already enlisted then release the reference
             //  which FltSetTransactionContext put on it and return success.
             //
-            
-            FltReleaseContext( oldTransactionContext );
+
+            FltReleaseContext(oldTransactionContext);
             return STATUS_SUCCESS;
         }
 
@@ -1471,51 +1477,52 @@ Return value
         //  and attempt enlistment.
         //
 
-        transactionContext = oldTransactionContext;            
+        transactionContext = oldTransactionContext;
     }
 
-ENLIST_IN_TRANSACTION: 
+ENLIST_IN_TRANSACTION:
 
     //
     //  Enlist on this transaction for notifications.
     //
 
-    FLT_ASSERT( MiniSpyData.PFltEnlistInTransaction );
+    FLT_ASSERT(MiniSpyData.PFltEnlistInTransaction);
 
-    status = (*MiniSpyData.PFltEnlistInTransaction)( FltObjects->Instance,
-                                                     FltObjects->Transaction,
-                                                     transactionContext,
-                                                     FLT_MAX_TRANSACTION_NOTIFICATIONS );
+    status = (*MiniSpyData.PFltEnlistInTransaction)(FltObjects->Instance,
+        FltObjects->Transaction,
+        transactionContext,
+        FLT_MAX_TRANSACTION_NOTIFICATIONS);
 
     //
     //  If the enlistment failed we might have to delete the context and remove
     //  our count.
     //
 
-    if (!NT_SUCCESS( status )) {
+    if (!NT_SUCCESS(status)) {
 
         //
         //  If the error is that we are already enlisted then we do not need
         //  to delete the context. Otherwise we have to delete the context
         //  before releasing our reference.
         //
-        
+
         if (status == STATUS_FLT_ALREADY_ENLISTED) {
 
             status = STATUS_SUCCESS;
 
-        } else {
+        }
+        else {
 
             //
             //  It is worth noting that only the first caller of
             //  FltDeleteContext will remove the reference added by
             //  filter manager when the context was set.
             //
-            
-            FltDeleteContext( transactionContext );
+
+            FltDeleteContext(transactionContext);
         }
-        
-        FltReleaseContext( transactionContext );
+
+        FltReleaseContext(transactionContext);
         return status;
     }
 
@@ -1524,13 +1531,13 @@ ENLIST_IN_TRANSACTION:
     //  successfully enlisted in the transaction.
     //
 
-    SetFlagInterlocked( &transactionContext->Flags, MINISPY_ENLISTED_IN_TRANSACTION );
-    
+    SetFlagInterlocked(&transactionContext->Flags, MINISPY_ENLISTED_IN_TRANSACTION);
+
     //
     //  The operation succeeded, remove our count
     //
 
-    FltReleaseContext( transactionContext );
+    FltReleaseContext(transactionContext);
 
     //
     //  Log a record that a new transaction has started.
@@ -1540,13 +1547,13 @@ ENLIST_IN_TRANSACTION:
 
     if (recordList) {
 
-        SpyLogTransactionNotify( FltObjects, recordList, 0 );
+        SpyLogTransactionNotify(FltObjects, recordList, 0);
 
         //
         //  Send the logged information to the user service.
         //
 
-        SpyLog( recordList );
+        SpyLog(recordList);
     }
 
 #endif // MINISPY_VISTA
@@ -1558,15 +1565,15 @@ ENLIST_IN_TRANSACTION:
 #if MINISPY_VISTA
 
 NTSTATUS
-SpyKtmNotificationCallback (
+SpyKtmNotificationCallback(
     _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _In_ PFLT_CONTEXT TransactionContext,
     _In_ ULONG TransactionNotification
-    )
+)
 {
     PRECORD_LIST recordList;
 
-    UNREFERENCED_PARAMETER( TransactionContext );
+    UNREFERENCED_PARAMETER(TransactionContext);
 
     //
     //  Try and get a log record
@@ -1576,13 +1583,13 @@ SpyKtmNotificationCallback (
 
     if (recordList) {
 
-        SpyLogTransactionNotify( FltObjects, recordList, TransactionNotification );
+        SpyLogTransactionNotify(FltObjects, recordList, TransactionNotification);
 
         //
         //  Send the logged information to the user service.
         //
 
-        SpyLog( recordList );
+        SpyLog(recordList);
     }
 
     return STATUS_SUCCESS;
@@ -1591,13 +1598,13 @@ SpyKtmNotificationCallback (
 #endif // MINISPY_VISTA
 
 VOID
-SpyDeleteTxfContext (
+SpyDeleteTxfContext(
     _Inout_ PMINISPY_TRANSACTION_CONTEXT Context,
     _In_ FLT_CONTEXT_TYPE ContextType
-    )
+)
 {
-    UNREFERENCED_PARAMETER( Context );
-    UNREFERENCED_PARAMETER( ContextType );
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(ContextType);
 
     FLT_ASSERT(FLT_TRANSACTION_CONTEXT == ContextType);
     FLT_ASSERT(Context->Count != 0);
@@ -1605,10 +1612,10 @@ SpyDeleteTxfContext (
 
 
 LONG
-SpyExceptionFilter (
+SpyExceptionFilter(
     _In_ PEXCEPTION_POINTERS ExceptionPointer,
     _In_ BOOLEAN AccessingUserBuffer
-    )
+)
 /*++
 
 Routine Description:
@@ -1640,7 +1647,7 @@ Return Value:
     //  unless we're touching user memory.
     //
 
-    if (!FsRtlIsNtstatusExpected( Status ) &&
+    if (!FsRtlIsNtstatusExpected(Status) &&
         !AccessingUserBuffer) {
 
         return EXCEPTION_CONTINUE_SEARCH;
@@ -1648,5 +1655,3 @@ Return Value:
 
     return EXCEPTION_EXECUTE_HANDLER;
 }
-
-
